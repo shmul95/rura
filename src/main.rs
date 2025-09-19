@@ -28,6 +28,7 @@ async fn main() -> tokio::io::Result<()> {
     loop {
         let (stream, client_addr) = listener.accept().await?;
         let conn = Arc::clone(&conn); // Clone connection for each task
+
         tokio::spawn(async move {
             if let Err(e) = handle_client(stream, conn).await {
                 eprintln!("Error handling client {}: {}", client_addr, e);
