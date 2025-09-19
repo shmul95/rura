@@ -1,5 +1,7 @@
-use rusqlite::{Connection, Result as SqliteResult, params};
-use sha2::{Digest, Sha256};
+use argon2::password_hash::{Error as PasswordHashError, PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
+use argon2::Argon2;
+use rusqlite::{params, Connection, Result as SqliteResult, ffi};
+use rand_core::OsRng;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
@@ -57,10 +59,28 @@ pub async fn log_client_connection(
     Ok(())
 }
 
-fn hash_pass(input: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(input.as_bytes());
-    format!("{:x}", hasher.finalize())
+fn map_password_error(err: PasswordHashError) -> rusqlite::Error {
+    rusqlite::Error::SqliteFailure(
+        ffi::Error::new(ffi::SQLITE_ERROR),
+        Some(format!("password hashing error: {err}")),
+    )
+}
+
+fn hash_password(password: &str) -> Result<String, rusqlite::Error> {
+    let salt = SaltString::generate(&mut OsRng);
+    Argon2::default()
+        .hash_password(password.as_bytes(), &salt)
+        .map(|hash| hash.to_string())
+        .map_err(map_password_error)
+}
+
+fn password_matches(hash: &str, password: &str) -> Result<bool, rusqlite::Error> {
+    let parsed_hash = PasswordHash::new(hash).map_err(map_password_error)?;
+    match Argon2::default().verify_password(password.as_bytes(), &parsed_hash) {
+        Ok(_) => Ok(true),
+        Err(PasswordHashError::Password) => Ok(false),
+        Err(e) => Err(map_password_error(e)),
+    }
 }
 
 pub async fn register_user(
@@ -68,13 +88,12 @@ pub async fn register_user(
     passphrase: &str,
     password: &str,
 ) -> SqliteResult<i64> {
-    let hashed_passphrase = hash_pass(passphrase);
-    let hashed_password = hash_pass(password);
+    let hashed_password = hash_password(password)?;
     let conn = conn.lock().unwrap();
 
     // Check if user with this passphrase already exists
     let mut stmt = conn.prepare("SELECT id FROM users WHERE passphrase = ?1")?;
-    let exists = stmt.exists(params![hashed_passphrase])?;
+    let exists = stmt.exists(params![passphrase])?;
 
     if exists {
         return Err(rusqlite::Error::SqliteFailure(
@@ -85,7 +104,7 @@ pub async fn register_user(
 
     conn.execute(
         "INSERT INTO users (passphrase, password) VALUES (?1, ?2)",
-        params![hashed_passphrase, hashed_password],
+        params![passphrase, hashed_password],
     )?;
 
     Ok(conn.last_insert_rowid())
@@ -96,19 +115,22 @@ pub async fn authenticate_user(
     passphrase: &str,
     password: &str,
 ) -> SqliteResult<Option<i64>> {
-    let hashed_passphrase = hash_pass(passphrase);
-    let hashed_password = hash_pass(password);
-    let conn = conn.lock().unwrap();
+    let (user_id, stored_hash) = {
+        let conn = conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT id, password FROM users WHERE passphrase = ?1")?;
 
-    let mut stmt = conn.prepare("SELECT id FROM users WHERE passphrase = ?1 AND password = ?2")?;
-    let user_id: Result<i64, _> = stmt
-        .query_row(params![hashed_passphrase, hashed_password], |row| {
-            row.get(0)
-        });
+        match stmt.query_row(params![passphrase], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        }) {
+            Ok(result) => result,
+            Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
+            Err(e) => return Err(e),
+        }
+    };
 
-    match user_id {
-        Ok(id) => Ok(Some(id)),
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-        Err(e) => Err(e),
+    if password_matches(&stored_hash, password)? {
+        Ok(Some(user_id))
+    } else {
+        Ok(None)
     }
 }
