@@ -1,10 +1,10 @@
+use crate::models::client_message::{AuthResponse, ClientMessage};
 use tokio::io::AsyncWriteExt;
-use crate::models::client_message::{ClientMessage, AuthResponse};
 
 pub async fn send_auth_success_response(
     stream: &mut tokio::net::TcpStream,
     user_id: i64,
-    message: &str
+    message: &str,
 ) -> tokio::io::Result<()> {
     let response = AuthResponse {
         success: true,
@@ -23,7 +23,7 @@ pub async fn send_auth_success_response(
 
 pub async fn send_auth_error_response(
     stream: &mut tokio::net::TcpStream,
-    message: &str
+    message: &str,
 ) -> tokio::io::Result<()> {
     let response = AuthResponse {
         success: false,

@@ -1,5 +1,5 @@
 use crate::auth::handlers::*;
-use crate::models::client_message::{ClientMessage, AuthRequest, AuthResponse};
+use crate::models::client_message::{AuthRequest, AuthResponse, ClientMessage};
 use crate::utils::db_utils::register_user;
 use rusqlite::Connection;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -13,7 +13,7 @@ fn test_socket_addr() -> SocketAddr {
 
 async fn create_test_db() -> Arc<Mutex<Connection>> {
     let conn = Connection::open(":memory:").unwrap();
-    
+
     // Create tables
     conn.execute(
         "CREATE TABLE users (
@@ -22,18 +22,19 @@ async fn create_test_db() -> Arc<Mutex<Connection>> {
             password TEXT NOT NULL
         )",
         [],
-    ).unwrap();
-    
+    )
+    .unwrap();
+
     Arc::new(Mutex::new(conn))
 }
 
 async fn create_mock_stream_pair() -> (tokio::net::TcpStream, tokio::net::TcpStream) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    
+
     let client_stream = TcpStream::connect(addr).await.unwrap();
     let (server_stream, _) = listener.accept().await.unwrap();
-    
+
     (server_stream, client_stream)
 }
 
@@ -55,14 +56,19 @@ async fn test_invalid_command_returns_error() {
     };
 
     // Process with handle_auth (this will send response to server_stream)
-    let result = handle_auth(&mut server_stream, conn, client_addr, &invalid_message).await.unwrap();
+    let result = handle_auth(&mut server_stream, conn, client_addr, &invalid_message)
+        .await
+        .unwrap();
     assert_eq!(result, None); // Should return None (not authenticated)
 
     // Read and verify the error response from client_stream
     let response = read_response(&mut client_stream).await;
     let response_msg: ClientMessage = serde_json::from_str(&response).unwrap();
     assert_eq!(response_msg.command, "error");
-    assert_eq!(response_msg.data, "Authentication required. Please send 'login' or 'register' command first");
+    assert_eq!(
+        response_msg.data,
+        "Authentication required. Please send 'login' or 'register' command first"
+    );
 }
 
 #[tokio::test]
@@ -76,18 +82,21 @@ async fn test_register_new_user_success() {
         data: serde_json::to_string(&AuthRequest {
             passphrase: "testuser".to_string(),
             password: "testpass".to_string(),
-        }).unwrap(),
+        })
+        .unwrap(),
     };
 
     // Process registration
-    let result = handle_auth(&mut server_stream, conn, client_addr, &register_message).await.unwrap();
+    let result = handle_auth(&mut server_stream, conn, client_addr, &register_message)
+        .await
+        .unwrap();
     assert!(result.is_some()); // Should return user ID
 
     // Read and verify the success response
     let response = read_response(&mut client_stream).await;
     let response_wrapper: ClientMessage = serde_json::from_str(&response).unwrap();
     assert_eq!(response_wrapper.command, "auth_response");
-    
+
     let response_msg: AuthResponse = serde_json::from_str(&response_wrapper.data).unwrap();
     assert!(response_msg.success);
     assert_eq!(response_msg.message, "Registration successful");
@@ -101,29 +110,30 @@ async fn test_login_valid_user_success() {
     let client_addr = test_socket_addr();
 
     // First register a user
-    let user_id = register_user(
-        Arc::clone(&conn), 
-        "testuser", 
-        "testpass"
-    ).await.unwrap();
+    let user_id = register_user(Arc::clone(&conn), "testuser", "testpass")
+        .await
+        .unwrap();
 
     let login_message = ClientMessage {
         command: "login".to_string(),
         data: serde_json::to_string(&AuthRequest {
             passphrase: "testuser".to_string(),
             password: "testpass".to_string(),
-        }).unwrap(),
+        })
+        .unwrap(),
     };
 
     // Process login
-    let result = handle_auth(&mut server_stream, conn, client_addr, &login_message).await.unwrap();
+    let result = handle_auth(&mut server_stream, conn, client_addr, &login_message)
+        .await
+        .unwrap();
     assert_eq!(result, Some(user_id)); // Should return the correct user ID
 
     // Read and verify the success response
     let response = read_response(&mut client_stream).await;
     let response_wrapper: ClientMessage = serde_json::from_str(&response).unwrap();
     assert_eq!(response_wrapper.command, "auth_response");
-    
+
     let response_msg: AuthResponse = serde_json::from_str(&response_wrapper.data).unwrap();
     assert!(response_msg.success);
     assert_eq!(response_msg.message, "Authentication successful");
@@ -137,29 +147,30 @@ async fn test_login_invalid_credentials_error() {
     let client_addr = test_socket_addr();
 
     // First register a user
-    register_user(
-        Arc::clone(&conn), 
-        "testuser", 
-        "testpass"
-    ).await.unwrap();
+    register_user(Arc::clone(&conn), "testuser", "testpass")
+        .await
+        .unwrap();
 
     let login_message = ClientMessage {
         command: "login".to_string(),
         data: serde_json::to_string(&AuthRequest {
             passphrase: "testuser".to_string(),
             password: "wrongpass".to_string(),
-        }).unwrap(),
+        })
+        .unwrap(),
     };
 
     // Process login with wrong password
-    let result = handle_auth(&mut server_stream, conn, client_addr, &login_message).await.unwrap();
+    let result = handle_auth(&mut server_stream, conn, client_addr, &login_message)
+        .await
+        .unwrap();
     assert_eq!(result, None); // Should return None (failed)
 
     // Read and verify the error response
     let response = read_response(&mut client_stream).await;
     let response_wrapper: ClientMessage = serde_json::from_str(&response).unwrap();
     assert_eq!(response_wrapper.command, "auth_response");
-    
+
     let response_msg: AuthResponse = serde_json::from_str(&response_wrapper.data).unwrap();
     assert!(!response_msg.success);
     assert!(response_msg.message.contains("Invalid"));

@@ -3,16 +3,17 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use tokio::io::AsyncWriteExt;
 
-use crate::models::client_message::{ClientMessage, AuthRequest};
+use super::responses::{send_auth_error_response, send_auth_success_response};
+use crate::models::client_message::{AuthRequest, ClientMessage};
 use crate::utils::db_utils::{authenticate_user, register_user};
-use super::responses::{send_auth_success_response, send_auth_error_response};
 
 pub async fn handle_auth_command_error(
-    stream: &mut tokio::net::TcpStream
+    stream: &mut tokio::net::TcpStream,
 ) -> tokio::io::Result<Option<i64>> {
     let error_msg = ClientMessage {
         command: "error".to_string(),
-        data: "Authentication required. Please send 'login' or 'register' command first".to_string(),
+        data: "Authentication required. Please send 'login' or 'register' command first"
+            .to_string(),
     };
     let response = serde_json::to_string(&error_msg)? + "\n";
     stream.write_all(response.as_bytes()).await?;
@@ -23,15 +24,18 @@ pub async fn handle_auth_command_error(
 pub async fn handle_auth_success(
     stream: &mut tokio::net::TcpStream,
     client_addr: SocketAddr,
-    user_id: i64
+    user_id: i64,
 ) -> tokio::io::Result<Option<i64>> {
     send_auth_success_response(stream, user_id, "Authentication successful").await?;
-    println!("User {} authenticated successfully from {}", user_id, client_addr);
+    println!(
+        "User {} authenticated successfully from {}",
+        user_id, client_addr
+    );
     Ok(Some(user_id))
 }
 
 pub async fn handle_auth_failure(
-    stream: &mut tokio::net::TcpStream
+    stream: &mut tokio::net::TcpStream,
 ) -> tokio::io::Result<Option<i64>> {
     send_auth_error_response(stream, "Invalid passphrase or password").await?;
     Ok(None)
@@ -39,7 +43,7 @@ pub async fn handle_auth_failure(
 
 pub async fn handle_auth_db_error(
     stream: &mut tokio::net::TcpStream,
-    e: rusqlite::Error
+    e: rusqlite::Error,
 ) -> tokio::io::Result<Option<i64>> {
     eprintln!("Database error during authentication: {}", e);
     send_auth_error_response(stream, "Authentication error").await?;
@@ -49,7 +53,7 @@ pub async fn handle_auth_db_error(
 pub async fn handle_auth_parse_error(
     stream: &mut tokio::net::TcpStream,
     client_addr: SocketAddr,
-    e: serde_json::Error
+    e: serde_json::Error,
 ) -> tokio::io::Result<Option<i64>> {
     eprintln!("Invalid auth data from {}: {}", client_addr, e);
     send_auth_error_response(stream, "Invalid authentication format").await?;
@@ -59,16 +63,19 @@ pub async fn handle_auth_parse_error(
 pub async fn handle_registration_success(
     stream: &mut tokio::net::TcpStream,
     client_addr: SocketAddr,
-    user_id: i64
+    user_id: i64,
 ) -> tokio::io::Result<Option<i64>> {
     send_auth_success_response(stream, user_id, "Registration successful").await?;
-    println!("User {} registered successfully from {}", user_id, client_addr);
+    println!(
+        "User {} registered successfully from {}",
+        user_id, client_addr
+    );
     Ok(Some(user_id))
 }
 
 pub async fn handle_registration_error(
     stream: &mut tokio::net::TcpStream,
-    e: rusqlite::Error
+    e: rusqlite::Error,
 ) -> tokio::io::Result<Option<i64>> {
     eprintln!("Registration error: {}", e);
     let message = if e.to_string().contains("already exists") {
@@ -83,7 +90,7 @@ pub async fn handle_registration_error(
 pub async fn handle_registration_parse_error(
     stream: &mut tokio::net::TcpStream,
     client_addr: SocketAddr,
-    e: serde_json::Error
+    e: serde_json::Error,
 ) -> tokio::io::Result<Option<i64>> {
     eprintln!("Invalid registration data from {}: {}", client_addr, e);
     send_auth_error_response(stream, "Invalid registration format").await?;
@@ -94,11 +101,13 @@ pub async fn handle_auth_login(
     stream: &mut tokio::net::TcpStream,
     conn: Arc<Mutex<Connection>>,
     client_addr: SocketAddr,
-    message: &ClientMessage
+    message: &ClientMessage,
 ) -> tokio::io::Result<Option<i64>> {
     match serde_json::from_str::<AuthRequest>(&message.data) {
         Ok(auth_req) => {
-            match authenticate_user(Arc::clone(&conn), &auth_req.passphrase, &auth_req.password).await {
+            match authenticate_user(Arc::clone(&conn), &auth_req.passphrase, &auth_req.password)
+                .await
+            {
                 Ok(Some(user_id)) => handle_auth_success(stream, client_addr, user_id).await,
                 Ok(None) => handle_auth_failure(stream).await,
                 Err(e) => handle_auth_db_error(stream, e).await,
@@ -112,7 +121,7 @@ pub async fn handle_auth_register(
     stream: &mut tokio::net::TcpStream,
     conn: Arc<Mutex<Connection>>,
     client_addr: SocketAddr,
-    message: &ClientMessage
+    message: &ClientMessage,
 ) -> tokio::io::Result<Option<i64>> {
     match serde_json::from_str::<AuthRequest>(&message.data) {
         Ok(auth_req) => {
@@ -129,7 +138,7 @@ pub async fn handle_auth(
     stream: &mut tokio::net::TcpStream,
     conn: Arc<Mutex<Connection>>,
     client_addr: SocketAddr,
-    message: &ClientMessage
+    message: &ClientMessage,
 ) -> tokio::io::Result<Option<i64>> {
     match message.command.as_str() {
         "login" => handle_auth_login(stream, conn, client_addr, message).await,

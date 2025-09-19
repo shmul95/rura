@@ -2,10 +2,10 @@ use clap::Parser;
 use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
 
-use conduit::models::args::Args;
 use conduit::client::handle_client;
-use conduit::utils::get_local_ip::get_local_ip;
+use conduit::models::args::Args;
 use conduit::utils::db_utils::init_db;
+use conduit::utils::get_local_ip::get_local_ip;
 
 #[tokio::main]
 async fn main() -> tokio::io::Result<()> {
@@ -19,10 +19,13 @@ async fn main() -> tokio::io::Result<()> {
 
     // Initialize SQLite database
     let conn = Arc::new(Mutex::new(init_db().expect("Failed to init the db")));
-    
+
     // Start TCP listener
     let listener = TcpListener::bind(&bind_addr).await?;
-    println!("Server listening on {}:{} (accessible from other devices)", local_ip, args.port);
+    println!(
+        "Server listening on {}:{} (accessible from other devices)",
+        local_ip, args.port
+    );
 
     // Accept connections
     loop {

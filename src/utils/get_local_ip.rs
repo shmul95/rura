@@ -1,4 +1,4 @@
-use std::net::{UdpSocket};
+use std::net::UdpSocket;
 
 pub fn get_local_ip() -> Option<String> {
     let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
