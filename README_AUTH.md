@@ -46,7 +46,8 @@ The server will respond with:
 
 ## Security Features
 
-- Passwords are hashed using SHA-256 before storage
+- Passwords are derived with Argon2id and stored in PHC format (algorithm, salt, parameters)
 - Each passphrase must be unique
 - Users cannot communicate without authentication
 - User sessions are maintained per connection
+- Credential verification relies on Argon2 for constant-time comparisons
