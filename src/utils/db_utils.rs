@@ -1,12 +1,14 @@
-use argon2::password_hash::{Error as PasswordHashError, PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use argon2::Argon2;
-use rusqlite::{params, Connection, Result as SqliteResult, ffi};
+use argon2::password_hash::{
+    Error as PasswordHashError, PasswordHash, PasswordHasher, PasswordVerifier, SaltString,
+};
 use rand_core::OsRng;
+use rusqlite::{Connection, Result as SqliteResult, ffi, params};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
-pub fn init_db() -> SqliteResult<Connection> {
-    let conn = Connection::open("rura.db")?;
+fn init_db_with_path<P: AsRef<std::path::Path>>(path: P) -> SqliteResult<Connection> {
+    let conn = Connection::open(path)?;
 
     // Create users table
     conn.execute(
@@ -43,6 +45,10 @@ pub fn init_db() -> SqliteResult<Connection> {
     )?;
 
     Ok(conn)
+}
+
+pub fn init_db() -> SqliteResult<Connection> {
+    init_db_with_path("rura.db")
 }
 
 pub async fn log_client_connection(
@@ -132,5 +138,123 @@ pub async fn authenticate_user(
         Ok(Some(user_id))
     } else {
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+    use std::sync::{Arc, Mutex};
+
+    fn columns_for(conn: &Connection, table: &str) -> SqliteResult<Vec<String>> {
+        let sql = format!("PRAGMA table_info({table})");
+        let mut stmt = conn.prepare(&sql)?;
+        let mut rows = stmt.query([])?;
+        let mut columns = Vec::new();
+        while let Some(row) = rows.next()? {
+            columns.push(row.get(1)?);
+        }
+        Ok(columns)
+    }
+
+    #[test]
+    fn init_db_creates_required_tables() {
+        let conn = init_db_with_path(":memory:").expect("failed to create in-memory db");
+
+        for table in ["users", "messages", "connections"] {
+            let columns = columns_for(&conn, table).expect("failed to read pragma");
+            assert!(
+                !columns.is_empty(),
+                "expected columns to be created for table `{}`",
+                table
+            );
+        }
+
+        let user_columns = columns_for(&conn, "users").expect("failed to read user columns");
+        assert!(user_columns.contains(&"id".to_string()));
+        assert!(user_columns.contains(&"passphrase".to_string()));
+        assert!(user_columns.contains(&"password".to_string()));
+    }
+
+    #[tokio::test]
+    async fn register_user_stores_argon2_hash_and_enforces_uniqueness() {
+        let conn = Arc::new(Mutex::new(
+            init_db_with_path(":memory:").expect("failed to create db"),
+        ));
+
+        let user_id = register_user(Arc::clone(&conn), "alice", "password123")
+            .await
+            .expect("failed to register user");
+        assert_eq!(user_id, 1);
+
+        let stored_hash = {
+            let guard = conn.lock().unwrap();
+            let mut stmt = guard
+                .prepare("SELECT password FROM users WHERE passphrase = ?1")
+                .expect("prepare failed");
+            stmt.query_row(params!["alice"], |row| row.get::<_, String>(0))
+                .expect("query failed")
+        };
+
+        assert!(stored_hash.starts_with("$argon2"));
+        assert_ne!(stored_hash, "password123");
+
+        let err = register_user(Arc::clone(&conn), "alice", "another")
+            .await
+            .expect_err("duplicate registration should fail");
+        assert!(err.to_string().contains("already exists"));
+    }
+
+    #[tokio::test]
+    async fn authenticate_user_validates_credentials() {
+        let conn = Arc::new(Mutex::new(
+            init_db_with_path(":memory:").expect("failed to create db"),
+        ));
+
+        let user_id = register_user(Arc::clone(&conn), "bob", "secret")
+            .await
+            .expect("registration failed");
+
+        let success = authenticate_user(Arc::clone(&conn), "bob", "secret")
+            .await
+            .expect("authentication errored");
+        assert_eq!(success, Some(user_id));
+
+        let wrong_password = authenticate_user(Arc::clone(&conn), "bob", "wrong")
+            .await
+            .expect("authentication errored");
+        assert_eq!(wrong_password, None);
+
+        let missing_user = authenticate_user(Arc::clone(&conn), "carol", "secret")
+            .await
+            .expect("authentication errored");
+        assert_eq!(missing_user, None);
+    }
+
+    #[tokio::test]
+    async fn log_client_connection_records_entry() {
+        let conn = Arc::new(Mutex::new(
+            init_db_with_path(":memory:").expect("failed to create db"),
+        ));
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)), 4242);
+
+        log_client_connection(Arc::clone(&conn), addr)
+            .await
+            .expect("logging connection failed");
+
+        let (count, ip) = {
+            let guard = conn.lock().unwrap();
+            let count: i64 = guard
+                .query_row("SELECT COUNT(*) FROM connections", [], |row| row.get(0))
+                .expect("select count failed");
+            let ip: String = guard
+                .query_row("SELECT ip FROM connections LIMIT 1", [], |row| row.get(0))
+                .expect("select ip failed");
+            (count, ip)
+        };
+
+        assert_eq!(count, 1);
+        assert_eq!(ip, addr.to_string());
     }
 }
