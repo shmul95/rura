@@ -4,8 +4,7 @@ use crate::utils::db_utils::register_user;
 use rusqlite::Connection;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
-use tokio::io::AsyncReadExt;
-use tokio::net::{TcpListener, TcpStream};
+use tokio::io::{AsyncReadExt, DuplexStream, duplex};
 
 fn test_socket_addr() -> SocketAddr {
     SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080)
@@ -28,17 +27,11 @@ async fn create_test_db() -> Arc<Mutex<Connection>> {
     Arc::new(Mutex::new(conn))
 }
 
-async fn create_mock_stream_pair() -> (tokio::net::TcpStream, tokio::net::TcpStream) {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-
-    let client_stream = TcpStream::connect(addr).await.unwrap();
-    let (server_stream, _) = listener.accept().await.unwrap();
-
-    (server_stream, client_stream)
+fn create_stream_pair() -> (DuplexStream, DuplexStream) {
+    duplex(1024)
 }
 
-async fn read_response(stream: &mut TcpStream) -> String {
+async fn read_response(stream: &mut DuplexStream) -> String {
     let mut buffer = [0; 1024];
     let n = stream.read(&mut buffer).await.unwrap();
     String::from_utf8_lossy(&buffer[..n]).trim().to_string()
@@ -46,7 +39,7 @@ async fn read_response(stream: &mut TcpStream) -> String {
 
 #[tokio::test]
 async fn test_invalid_command_returns_error() {
-    let (mut server_stream, mut client_stream) = create_mock_stream_pair().await;
+    let (mut server_stream, mut client_stream) = create_stream_pair();
     let conn = create_test_db().await;
     let client_addr = test_socket_addr();
 
@@ -73,7 +66,7 @@ async fn test_invalid_command_returns_error() {
 
 #[tokio::test]
 async fn test_register_new_user_success() {
-    let (mut server_stream, mut client_stream) = create_mock_stream_pair().await;
+    let (mut server_stream, mut client_stream) = create_stream_pair();
     let conn = create_test_db().await;
     let client_addr = test_socket_addr();
 
@@ -105,7 +98,7 @@ async fn test_register_new_user_success() {
 
 #[tokio::test]
 async fn test_login_valid_user_success() {
-    let (mut server_stream, mut client_stream) = create_mock_stream_pair().await;
+    let (mut server_stream, mut client_stream) = create_stream_pair();
     let conn = create_test_db().await;
     let client_addr = test_socket_addr();
 
@@ -142,7 +135,7 @@ async fn test_login_valid_user_success() {
 
 #[tokio::test]
 async fn test_login_invalid_credentials_error() {
-    let (mut server_stream, mut client_stream) = create_mock_stream_pair().await;
+    let (mut server_stream, mut client_stream) = create_stream_pair();
     let conn = create_test_db().await;
     let client_addr = test_socket_addr();
 
