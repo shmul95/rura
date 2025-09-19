@@ -83,7 +83,7 @@ async fn handle_client_message(
     user_id: i64,
     buffer: &[u8],
 ) -> tokio::io::Result<()> {
-    let received = String::from_utf8_lossy(&buffer).to_string();
+    let received = String::from_utf8_lossy(buffer).to_string();
     // Try to parse incoming data as JSON
     match serde_json::from_str::<ClientMessage>(&received) {
         Ok(msg) => handle_message_success(stream, client_addr, user_id, msg).await,
