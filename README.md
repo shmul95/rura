@@ -65,11 +65,36 @@ See: ARCHITECTURE.md for a module-by-module map and flow.
 - Test: `cargo test`
 - Toolchain: stable Rust; rusqlite uses the `bundled` feature (no external SQLite needed)
 
+## Tests & Coverage
+
+- Run all tests
+  - `cargo test`
+
+- Run a specific test target
+  - Unit tests only: `cargo test --lib`
+  - Integration tests only: `cargo test --test integration_tests`
+  - End-to-end messaging: `cargo test --test end_to_end_messaging`
+  - Messaging unit tests: `cargo test --test messaging_tests`
+  - AppState unit tests: `cargo test --test app_state_tests`
+
+- Generate HTML coverage (Linux)
+  - Install once: `cargo install cargo-tarpaulin`
+  - Generate: `cargo tarpaulin --all-features --workspace --out Html`
+  - Open report: `tarpaulin-report.html`
+  - Note: Tarpaulin uses ptrace; if your distro restricts it, you may need to allow ptrace temporarily (e.g., `sudo sysctl kernel.yama.ptrace_scope=0`).
+
+- Cross-platform coverage alternative
+  - Install: `rustup component add llvm-tools-preview && cargo install cargo-llvm-cov`
+  - Generate: `cargo llvm-cov --all-features --workspace --html`
+  - Open report: `target/llvm-cov/html/index.html`
+
+- CI threshold
+  - GitHub Actions enforces a minimum of 80% coverage.
+
 ## Configuration
 - CLI: `--port <PORT>` (default 8080). See `src/models/args.rs`.
 
 ## Limitations
-- Messaging delivers only to online users (no persistence/history yet).
+- Delivery occurs only to online users (no offline delivery yet), but messages are persisted in the database with a `saved` flag.
 - No sender acknowledgement or error on unknown recipients (by design for now).
 - Envelope uses a JSON string for `data` to keep parsing stable; consider migrating to structured payloads if you control all clients.
-
