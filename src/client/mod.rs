@@ -2,6 +2,7 @@ use rusqlite::Connection;
 use std::sync::{Arc, Mutex};
 use tokio::io::AsyncWriteExt;
 
+use crate::messaging::state::AppState;
 use crate::models::client_message::ClientMessage;
 use crate::utils::db_utils::log_client_connection;
 
@@ -14,6 +15,7 @@ mod unauth;
 pub async fn handle_client(
     mut stream: tokio::net::TcpStream,
     conn: Arc<Mutex<Connection>>,
+    state: Arc<AppState>,
 ) -> tokio::io::Result<()> {
     let client_addr = stream.peer_addr()?;
 
@@ -35,6 +37,6 @@ pub async fn handle_client(
     stream.flush().await?;
 
     // Handle client authentication and subsequent messages
-    loop_task::handle_client_loop(&mut stream, Arc::clone(&conn), client_addr).await?;
+    loop_task::handle_client_loop(&mut stream, Arc::clone(&conn), state, client_addr).await?;
     Ok(())
 }

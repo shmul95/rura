@@ -1,51 +1,150 @@
 use std::net::SocketAddr;
-use tokio::io::AsyncWriteExt;
+use std::sync::Arc;
 
+use tokio::sync::mpsc;
+
+use crate::messaging::handlers::send_direct;
+use crate::messaging::models::DirectMessageReq;
+use crate::messaging::state::AppState;
 use crate::models::client_message::ClientMessage;
 
 pub(super) async fn handle_client_message(
-    stream: &mut tokio::net::TcpStream,
+    state: Arc<AppState>,
+    outbound: &mpsc::UnboundedSender<ClientMessage>,
     client_addr: SocketAddr,
     user_id: i64,
     buffer: &[u8],
 ) -> tokio::io::Result<()> {
     let received = String::from_utf8_lossy(buffer).to_string();
-    // Try to parse incoming data as JSON
     match serde_json::from_str::<ClientMessage>(&received) {
-        Ok(msg) => handle_message_success(stream, client_addr, user_id, msg).await,
-        Err(e) => handle_message_parse_error(stream, client_addr, e).await,
+        Ok(msg) => {
+            println!(
+                "Received from authenticated user {} ({}): {:?}",
+                user_id, client_addr, msg
+            );
+            match msg.command.as_str() {
+                "message" => {
+                    match serde_json::from_str::<DirectMessageReq>(&msg.data) {
+                        Ok(req) => {
+                            send_direct(Arc::clone(&state), user_id, req).await?;
+                        }
+                        Err(_) => {
+                            // Notify sender about malformed message request
+                            let err = ClientMessage {
+                                command: "error".to_string(),
+                                data: "Invalid message format".to_string(),
+                            };
+                            let _ = outbound.send(err);
+                        }
+                    }
+                }
+                // default: echo back via outbound to keep behavior simple
+                _ => {
+                    let _ = outbound.send(msg);
+                }
+            }
+            Ok(())
+        }
+        Err(_) => {
+            // Parsing failed; notify sender via outbound
+            let error_msg = ClientMessage {
+                command: "error".to_string(),
+                data: "Invalid JSON".to_string(),
+            };
+            let _ = outbound.send(error_msg);
+            Ok(())
+        }
     }
 }
 
-pub(super) async fn handle_message_success(
-    stream: &mut tokio::net::TcpStream,
-    client_addr: SocketAddr,
-    user_id: i64,
-    msg: ClientMessage,
-) -> tokio::io::Result<()> {
-    println!(
-        "Received from authenticated user {} ({}): {:?}",
-        user_id, client_addr, msg
-    );
-    // Echo back the same message (you can modify this to handle different commands)
-    let response = serde_json::to_string(&msg)? + "\n";
-    stream.write_all(response.as_bytes()).await?;
-    stream.flush().await?;
-    Ok(())
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+    use tokio::time::{Duration, timeout};
 
-pub(super) async fn handle_message_parse_error(
-    stream: &mut tokio::net::TcpStream,
-    client_addr: SocketAddr,
-    e: serde_json::Error,
-) -> tokio::io::Result<()> {
-    eprintln!("Invalid JSON from {}: {}", client_addr, e);
-    let error_msg = ClientMessage {
-        command: "error".to_string(),
-        data: "Invalid JSON".to_string(),
-    };
-    let response = serde_json::to_string(&error_msg)? + "\n";
-    stream.write_all(response.as_bytes()).await?;
-    stream.flush().await?;
-    Ok(())
+    fn test_addr() -> SocketAddr {
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8080)
+    }
+
+    #[tokio::test]
+    async fn test_invalid_message_format_sends_error_to_sender() {
+        let state = Arc::new(AppState::default());
+        let (tx_out, mut rx_out) = mpsc::unbounded_channel::<ClientMessage>();
+
+        // Build a ClientMessage with command "message" but invalid JSON in data
+        let wire = ClientMessage {
+            command: "message".to_string(),
+            data: "not json".to_string(),
+        };
+        let wire_str = serde_json::to_string(&wire).unwrap();
+
+        // Call the handler as if it received this line
+        handle_client_message(
+            Arc::clone(&state),
+            &tx_out,
+            test_addr(),
+            1,
+            wire_str.as_bytes(),
+        )
+        .await
+        .unwrap();
+
+        // Expect an error response to be queued back to the sender via outbound
+        let resp = timeout(Duration::from_millis(100), rx_out.recv())
+            .await
+            .expect("timed out waiting for outbound")
+            .expect("outbound channel closed");
+
+        assert_eq!(resp.command, "error");
+        assert_eq!(resp.data, "Invalid message format");
+    }
+
+    #[tokio::test]
+    async fn test_invalid_envelope_sends_invalid_json_error() {
+        let state = Arc::new(AppState::default());
+        let (tx_out, mut rx_out) = mpsc::unbounded_channel::<ClientMessage>();
+
+        // Send completely invalid JSON (not a valid envelope)
+        handle_client_message(Arc::clone(&state), &tx_out, test_addr(), 1, b"not json")
+            .await
+            .unwrap();
+
+        let resp = timeout(Duration::from_millis(100), rx_out.recv())
+            .await
+            .expect("timed out waiting for outbound")
+            .expect("outbound channel closed");
+
+        assert_eq!(resp.command, "error");
+        assert_eq!(resp.data, "Invalid JSON");
+    }
+
+    #[tokio::test]
+    async fn test_non_message_command_is_echoed() {
+        let state = Arc::new(AppState::default());
+        let (tx_out, mut rx_out) = mpsc::unbounded_channel::<ClientMessage>();
+
+        let envelope = ClientMessage {
+            command: "ping".to_string(),
+            data: "hello".to_string(),
+        };
+        let wire = serde_json::to_string(&envelope).unwrap();
+
+        handle_client_message(
+            Arc::clone(&state),
+            &tx_out,
+            test_addr(),
+            42,
+            wire.as_bytes(),
+        )
+        .await
+        .unwrap();
+
+        let resp = timeout(Duration::from_millis(100), rx_out.recv())
+            .await
+            .expect("timed out waiting for outbound")
+            .expect("outbound channel closed");
+        assert_eq!(resp.command, "ping");
+        assert_eq!(resp.data, "hello");
+    }
 }

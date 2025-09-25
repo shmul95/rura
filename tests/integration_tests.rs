@@ -1,6 +1,6 @@
-use conduit::auth::handlers::handle_auth;
-use conduit::models::client_message::{AuthRequest, AuthResponse, ClientMessage};
-use conduit::utils::db_utils::register_user;
+use rura::auth::handlers::handle_auth;
+use rura::models::client_message::{AuthRequest, AuthResponse, ClientMessage};
+use rura::utils::db_utils::register_user;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, DuplexStream, duplex};
