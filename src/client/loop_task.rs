@@ -45,13 +45,11 @@ pub(super) async fn handle_client_loop(
                                 &buffer[..n],
                             ).await?;
 
-                            if was_unauth {
-                                if let Some(user_id) = authenticated_user_id {
-                                    let (tx, new_rx) = mpsc::unbounded_channel();
-                                    state.register(user_id, ClientHandle { tx: tx.clone() }).await;
-                                    outbound_tx = Some(tx);
-                                    outbound_rx = Some(new_rx);
-                                }
+                            if let Some(user_id) = authenticated_user_id.filter(|_| was_unauth) {
+                                let (tx, new_rx) = mpsc::unbounded_channel();
+                                state.register(user_id, ClientHandle { tx: tx.clone() }).await;
+                                outbound_tx = Some(tx);
+                                outbound_rx = Some(new_rx);
                             }
                         }
                         Err(e) => {
@@ -98,15 +96,13 @@ pub(super) async fn handle_client_loop(
                     .await?;
 
                     // If we just became authenticated, set up outbound channel and register
-                    if was_unauth {
-                        if let Some(user_id) = authenticated_user_id {
-                            let (tx, rx) = mpsc::unbounded_channel();
-                            state
-                                .register(user_id, ClientHandle { tx: tx.clone() })
-                                .await;
-                            outbound_tx = Some(tx);
-                            outbound_rx = Some(rx);
-                        }
+                    if let Some(user_id) = authenticated_user_id.filter(|_| was_unauth) {
+                        let (tx, rx) = mpsc::unbounded_channel();
+                        state
+                            .register(user_id, ClientHandle { tx: tx.clone() })
+                            .await;
+                        outbound_tx = Some(tx);
+                        outbound_rx = Some(rx);
                     }
                 }
                 Err(e) => {
