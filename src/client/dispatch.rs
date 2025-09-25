@@ -6,8 +6,8 @@ use tokio::sync::mpsc;
 
 use crate::models::client_message::ClientMessage;
 
-use crate::messaging::state::AppState;
 use super::{authed, unauth};
+use crate::messaging::state::AppState;
 
 pub(super) async fn handle_read_success(
     stream: &mut tokio::net::TcpStream,

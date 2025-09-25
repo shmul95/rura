@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 
 use crate::models::client_message::ClientMessage;
 
@@ -32,4 +32,3 @@ impl AppState {
 }
 
 pub type SharedAppState = Arc<AppState>;
-

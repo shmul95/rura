@@ -2,8 +2,8 @@ use rusqlite::Connection;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::mpsc;
 use tokio::select;
+use tokio::sync::mpsc;
 
 use crate::messaging::state::{AppState, ClientHandle};
 
@@ -17,8 +17,12 @@ pub(super) async fn handle_client_loop(
 ) -> tokio::io::Result<()> {
     let mut buffer = [0; 1024];
     let mut authenticated_user_id: Option<i64> = None;
-    let mut outbound_tx: Option<mpsc::UnboundedSender<crate::models::client_message::ClientMessage>> = None;
-    let mut outbound_rx: Option<mpsc::UnboundedReceiver<crate::models::client_message::ClientMessage>> = None;
+    let mut outbound_tx: Option<
+        mpsc::UnboundedSender<crate::models::client_message::ClientMessage>,
+    > = None;
+    let mut outbound_rx: Option<
+        mpsc::UnboundedReceiver<crate::models::client_message::ClientMessage>,
+    > = None;
 
     loop {
         if let Some(rx) = outbound_rx.as_mut() {
@@ -61,9 +65,9 @@ pub(super) async fn handle_client_loop(
                         Some(msg) => {
                             if let Ok(mut json) = serde_json::to_string(&msg) {
                                 json.push('\n');
-                                if let Err(e) = stream.write_all(json.as_bytes()).await { 
-                                    io_helpers::handle_read_error(client_addr, e).await; 
-                                    break; 
+                                if let Err(e) = stream.write_all(json.as_bytes()).await {
+                                    io_helpers::handle_read_error(client_addr, e).await;
+                                    break;
                                 }
                                 let _ = stream.flush().await;
                             }
@@ -90,13 +94,16 @@ pub(super) async fn handle_client_loop(
                         &mut authenticated_user_id,
                         outbound_tx.as_ref(),
                         &buffer[..n],
-                    ).await?;
+                    )
+                    .await?;
 
                     // If we just became authenticated, set up outbound channel and register
                     if was_unauth {
                         if let Some(user_id) = authenticated_user_id {
                             let (tx, rx) = mpsc::unbounded_channel();
-                            state.register(user_id, ClientHandle { tx: tx.clone() }).await;
+                            state
+                                .register(user_id, ClientHandle { tx: tx.clone() })
+                                .await;
                             outbound_tx = Some(tx);
                             outbound_rx = Some(rx);
                         }
