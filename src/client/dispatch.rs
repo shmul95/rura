@@ -2,20 +2,26 @@ use rusqlite::Connection;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
+use tokio::sync::mpsc;
+
 use crate::models::client_message::ClientMessage;
 
+use crate::messaging::state::AppState;
 use super::{authed, unauth};
 
 pub(super) async fn handle_read_success(
     stream: &mut tokio::net::TcpStream,
     conn: Arc<Mutex<Connection>>,
+    state: Arc<AppState>,
     client_addr: SocketAddr,
     authenticated_user_id: &mut Option<i64>,
+    outbound_tx: Option<&mpsc::UnboundedSender<ClientMessage>>,
     buffer: &[u8],
 ) -> tokio::io::Result<()> {
     if let Some(user_id) = *authenticated_user_id {
         // User is authenticated, allow normal communication
-        authed::handle_client_message(stream, client_addr, user_id, buffer).await
+        let tx = outbound_tx.expect("outbound sender not set for authenticated user");
+        authed::handle_client_message(Arc::clone(&state), tx, client_addr, user_id, buffer).await
     } else {
         // User not authenticated, only allow auth commands
         let received = String::from_utf8_lossy(buffer).to_string();
