@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use rusqlite::Connection;
+use std::sync::Arc;
 use std::sync::Mutex;
 
 use crate::models::client_message::ClientMessage;

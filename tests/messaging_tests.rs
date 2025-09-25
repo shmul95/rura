@@ -2,10 +2,10 @@ use rura::messaging::handlers::send_direct;
 use rura::messaging::models::{DirectMessageEvent, DirectMessageReq};
 use rura::messaging::state::{AppState, ClientHandle};
 use rura::models::client_message::ClientMessage;
+use rusqlite::Connection;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use tokio::time::{Duration, timeout};
-use rusqlite::Connection;
 
 #[tokio::test]
 async fn test_send_direct_to_online_user_delivers_message() {
@@ -36,7 +36,11 @@ async fn test_send_direct_to_online_user_delivers_message() {
     let alice_id = 1_i64;
 
     // Send a direct message to Bob
-    let req = DirectMessageReq { to_user_id: bob_id, body: "hello world".to_string(), saved: None };
+    let req = DirectMessageReq {
+        to_user_id: bob_id,
+        body: "hello world".to_string(),
+        saved: None,
+    };
     send_direct(Arc::clone(&state), Arc::clone(&conn), alice_id, req)
         .await
         .unwrap();
@@ -90,7 +94,11 @@ async fn test_send_direct_to_unknown_user_sends_nothing() {
     // Attempt to send to a user id that is not registered
     let unknown_user_id = 12345_i64;
     let from_user_id = 1_i64;
-    let req = DirectMessageReq { to_user_id: unknown_user_id, body: "are you there?".to_string(), saved: None };
+    let req = DirectMessageReq {
+        to_user_id: unknown_user_id,
+        body: "are you there?".to_string(),
+        saved: None,
+    };
     send_direct(Arc::clone(&state), Arc::clone(&conn), from_user_id, req)
         .await
         .expect("send_direct should not error for unknown user");

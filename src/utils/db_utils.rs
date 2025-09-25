@@ -48,7 +48,10 @@ fn init_db_with_path<P: AsRef<std::path::Path>>(path: P) -> SqliteResult<Connect
             }
         }
         if !has_saved {
-            conn.execute("ALTER TABLE messages ADD COLUMN saved INTEGER NOT NULL DEFAULT 0", [])?;
+            conn.execute(
+                "ALTER TABLE messages ADD COLUMN saved INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
         }
     }
 

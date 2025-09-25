@@ -7,8 +7,8 @@ use crate::messaging::handlers::send_direct;
 use crate::messaging::models::{DirectMessageReq, SaveRequest, SaveResponse};
 use crate::messaging::state::AppState;
 use crate::models::client_message::ClientMessage;
-use rusqlite::Connection;
 use crate::utils::db_utils::set_message_saved;
+use rusqlite::Connection;
 
 pub(super) async fn handle_client_message(
     state: Arc<AppState>,
@@ -42,61 +42,66 @@ pub(super) async fn handle_client_message(
                         }
                     }
                 }
-                "save" => {
-                    match serde_json::from_str::<SaveRequest>(&msg.data) {
-                        Ok(req) => {
-                            let saved_flag = req.saved.unwrap_or(true);
-                            match set_message_saved(Arc::clone(&conn), user_id, req.message_id, saved_flag).await {
-                                Ok(true) => {
-                                    let resp = SaveResponse {
-                                        success: true,
-                                        message: "Message updated".to_string(),
-                                        message_id: Some(req.message_id),
-                                        saved: Some(saved_flag),
-                                    };
-                                    let wrapper = ClientMessage {
-                                        command: "save_response".to_string(),
-                                        data: serde_json::to_string(&resp).unwrap(),
-                                    };
-                                    let _ = outbound.send(wrapper);
-                                }
-                                Ok(false) => {
-                                    let resp = SaveResponse {
-                                        success: false,
-                                        message: "Message not found or not authorized".to_string(),
-                                        message_id: Some(req.message_id),
-                                        saved: Some(saved_flag),
-                                    };
-                                    let wrapper = ClientMessage {
-                                        command: "save_response".to_string(),
-                                        data: serde_json::to_string(&resp).unwrap(),
-                                    };
-                                    let _ = outbound.send(wrapper);
-                                }
-                                Err(_) => {
-                                    let resp = SaveResponse {
-                                        success: false,
-                                        message: "Failed to update message".to_string(),
-                                        message_id: Some(req.message_id),
-                                        saved: Some(saved_flag),
-                                    };
-                                    let wrapper = ClientMessage {
-                                        command: "save_response".to_string(),
-                                        data: serde_json::to_string(&resp).unwrap(),
-                                    };
-                                    let _ = outbound.send(wrapper);
-                                }
+                "save" => match serde_json::from_str::<SaveRequest>(&msg.data) {
+                    Ok(req) => {
+                        let saved_flag = req.saved.unwrap_or(true);
+                        match set_message_saved(
+                            Arc::clone(&conn),
+                            user_id,
+                            req.message_id,
+                            saved_flag,
+                        )
+                        .await
+                        {
+                            Ok(true) => {
+                                let resp = SaveResponse {
+                                    success: true,
+                                    message: "Message updated".to_string(),
+                                    message_id: Some(req.message_id),
+                                    saved: Some(saved_flag),
+                                };
+                                let wrapper = ClientMessage {
+                                    command: "save_response".to_string(),
+                                    data: serde_json::to_string(&resp).unwrap(),
+                                };
+                                let _ = outbound.send(wrapper);
+                            }
+                            Ok(false) => {
+                                let resp = SaveResponse {
+                                    success: false,
+                                    message: "Message not found or not authorized".to_string(),
+                                    message_id: Some(req.message_id),
+                                    saved: Some(saved_flag),
+                                };
+                                let wrapper = ClientMessage {
+                                    command: "save_response".to_string(),
+                                    data: serde_json::to_string(&resp).unwrap(),
+                                };
+                                let _ = outbound.send(wrapper);
+                            }
+                            Err(_) => {
+                                let resp = SaveResponse {
+                                    success: false,
+                                    message: "Failed to update message".to_string(),
+                                    message_id: Some(req.message_id),
+                                    saved: Some(saved_flag),
+                                };
+                                let wrapper = ClientMessage {
+                                    command: "save_response".to_string(),
+                                    data: serde_json::to_string(&resp).unwrap(),
+                                };
+                                let _ = outbound.send(wrapper);
                             }
                         }
-                        Err(_) => {
-                            let err = ClientMessage {
-                                command: "error".to_string(),
-                                data: "Invalid save format".to_string(),
-                            };
-                            let _ = outbound.send(err);
-                        }
                     }
-                }
+                    Err(_) => {
+                        let err = ClientMessage {
+                            command: "error".to_string(),
+                            data: "Invalid save format".to_string(),
+                        };
+                        let _ = outbound.send(err);
+                    }
+                },
                 // default: echo back via outbound to keep behavior simple
                 _ => {
                     let _ = outbound.send(msg);
@@ -119,10 +124,10 @@ pub(super) async fn handle_client_message(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::messaging::models::SaveRequest;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use tokio::time::{Duration, timeout};
-    use crate::messaging::models::SaveRequest;
-    
+
     fn test_addr() -> SocketAddr {
         SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8080)
     }
@@ -156,9 +161,16 @@ mod tests {
         let wire_str = serde_json::to_string(&wire).unwrap();
 
         // Call the handler as if it received this line
-        handle_client_message(Arc::clone(&state), Arc::clone(&conn), &tx_out, test_addr(), 1, wire_str.as_bytes())
-            .await
-            .unwrap();
+        handle_client_message(
+            Arc::clone(&state),
+            Arc::clone(&conn),
+            &tx_out,
+            test_addr(),
+            1,
+            wire_str.as_bytes(),
+        )
+        .await
+        .unwrap();
 
         // Expect an error response to be queued back to the sender via outbound
         let resp = timeout(Duration::from_millis(100), rx_out.recv())
@@ -192,9 +204,16 @@ mod tests {
         }
 
         // Send completely invalid JSON (not a valid envelope)
-        handle_client_message(Arc::clone(&state), Arc::clone(&conn), &tx_out, test_addr(), 1, b"not json")
-            .await
-            .unwrap();
+        handle_client_message(
+            Arc::clone(&state),
+            Arc::clone(&conn),
+            &tx_out,
+            test_addr(),
+            1,
+            b"not json",
+        )
+        .await
+        .unwrap();
 
         let resp = timeout(Duration::from_millis(100), rx_out.recv())
             .await
@@ -232,9 +251,16 @@ mod tests {
         };
         let wire = serde_json::to_string(&envelope).unwrap();
 
-        handle_client_message(Arc::clone(&state), Arc::clone(&conn), &tx_out, test_addr(), 42, wire.as_bytes())
-            .await
-            .unwrap();
+        handle_client_message(
+            Arc::clone(&state),
+            Arc::clone(&conn),
+            &tx_out,
+            test_addr(),
+            42,
+            wire.as_bytes(),
+        )
+        .await
+        .unwrap();
 
         let resp = timeout(Duration::from_millis(100), rx_out.recv())
             .await
@@ -273,7 +299,10 @@ mod tests {
         let (tx_out, mut rx_out) = mpsc::unbounded_channel::<ClientMessage>();
 
         // Compose save request for message id 1 by sender user 1
-        let save_req = SaveRequest { message_id: 1, saved: Some(true) };
+        let save_req = SaveRequest {
+            message_id: 1,
+            saved: Some(true),
+        };
         let wire = ClientMessage {
             command: "save".to_string(),
             data: serde_json::to_string(&save_req).unwrap(),
@@ -297,7 +326,8 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(resp.command, "save_response");
-        let parsed: crate::messaging::models::SaveResponse = serde_json::from_str(&resp.data).unwrap();
+        let parsed: crate::messaging::models::SaveResponse =
+            serde_json::from_str(&resp.data).unwrap();
         assert!(parsed.success);
         assert_eq!(parsed.message_id, Some(1));
         assert_eq!(parsed.saved, Some(true));
@@ -320,7 +350,8 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(resp2.command, "save_response");
-        let parsed2: crate::messaging::models::SaveResponse = serde_json::from_str(&resp2.data).unwrap();
+        let parsed2: crate::messaging::models::SaveResponse =
+            serde_json::from_str(&resp2.data).unwrap();
         assert!(!parsed2.success);
         assert_eq!(parsed2.message_id, Some(1));
     }
