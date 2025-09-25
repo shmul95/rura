@@ -132,9 +132,14 @@ async fn test_duplicate_registration_returns_error() {
     };
 
     // First registration succeeds
-    let first = handle_auth(&mut server_stream, Arc::clone(&conn), client_addr, &register_message)
-        .await
-        .unwrap();
+    let first = handle_auth(
+        &mut server_stream,
+        Arc::clone(&conn),
+        client_addr,
+        &register_message,
+    )
+    .await
+    .unwrap();
     assert!(first.is_some());
     let _ = read_response(&mut client_stream).await; // success auth_response
 

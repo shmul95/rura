@@ -39,8 +39,8 @@ pub(super) async fn handle_unauthenticated_parse_error(
 mod tests {
     use super::*;
     use std::net::{IpAddr, Ipv4Addr};
-    use tokio::net::TcpListener;
     use tokio::io::AsyncReadExt;
+    use tokio::net::TcpListener;
 
     #[tokio::test]
     async fn test_unauth_invalid_json_sends_error() {
@@ -58,7 +58,9 @@ mod tests {
         let mut server_stream = accept_fut.await.unwrap();
 
         // Invoke the error handler
-        let parse_err = serde_json::from_str::<crate::models::client_message::ClientMessage>("not json").unwrap_err();
+        let parse_err =
+            serde_json::from_str::<crate::models::client_message::ClientMessage>("not json")
+                .unwrap_err();
         let client_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8080);
         handle_unauthenticated_parse_error(&mut server_stream, client_addr, parse_err)
             .await

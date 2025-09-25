@@ -106,15 +106,9 @@ mod tests {
         let (tx_out, mut rx_out) = mpsc::unbounded_channel::<ClientMessage>();
 
         // Send completely invalid JSON (not a valid envelope)
-        handle_client_message(
-            Arc::clone(&state),
-            &tx_out,
-            test_addr(),
-            1,
-            b"not json",
-        )
-        .await
-        .unwrap();
+        handle_client_message(Arc::clone(&state), &tx_out, test_addr(), 1, b"not json")
+            .await
+            .unwrap();
 
         let resp = timeout(Duration::from_millis(100), rx_out.recv())
             .await
@@ -130,7 +124,10 @@ mod tests {
         let state = Arc::new(AppState::default());
         let (tx_out, mut rx_out) = mpsc::unbounded_channel::<ClientMessage>();
 
-        let envelope = ClientMessage { command: "ping".to_string(), data: "hello".to_string() };
+        let envelope = ClientMessage {
+            command: "ping".to_string(),
+            data: "hello".to_string(),
+        };
         let wire = serde_json::to_string(&envelope).unwrap();
 
         handle_client_message(

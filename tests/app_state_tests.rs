@@ -17,7 +17,10 @@ async fn test_register_get_unregister_sender() {
     // Get and send a message
     let got_tx = state.get_sender(1).await.expect("expected sender");
     got_tx
-        .send(ClientMessage { command: "ping".into(), data: "pong".into() })
+        .send(ClientMessage {
+            command: "ping".into(),
+            data: "pong".into(),
+        })
         .unwrap();
 
     // Verify receiver gets it
@@ -29,4 +32,3 @@ async fn test_register_get_unregister_sender() {
     state.unregister(1).await;
     assert!(state.get_sender(1).await.is_none());
 }
-
