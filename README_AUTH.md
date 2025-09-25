@@ -2,6 +2,8 @@
 
 This server now requires user authentication before allowing communication. Users must register or login before they can send messages.
 
+See also: PROTOCOL.md for the full wire protocol, including authentication, messaging, and error semantics.
+
 ## Authentication Flow
 
 1. Client connects to the server
