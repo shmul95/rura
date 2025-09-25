@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 pub struct DirectMessageReq {
     pub to_user_id: i64,
     pub body: String,
+    pub saved: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
