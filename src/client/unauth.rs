@@ -34,3 +34,42 @@ pub(super) async fn handle_unauthenticated_parse_error(
     stream.flush().await?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{IpAddr, Ipv4Addr};
+    use tokio::net::TcpListener;
+    use tokio::io::AsyncReadExt;
+
+    #[tokio::test]
+    async fn test_unauth_invalid_json_sends_error() {
+        // Create a loopback TCP pair
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        // Accept in background
+        let accept_fut = tokio::spawn(async move { listener.accept().await.unwrap().0 });
+
+        // Connect client side
+        let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
+
+        // Get server side stream
+        let mut server_stream = accept_fut.await.unwrap();
+
+        // Invoke the error handler
+        let parse_err = serde_json::from_str::<crate::models::client_message::ClientMessage>("not json").unwrap_err();
+        let client_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8080);
+        handle_unauthenticated_parse_error(&mut server_stream, client_addr, parse_err)
+            .await
+            .unwrap();
+
+        // Read from client side
+        let mut buf = [0u8; 1024];
+        let n = client.read(&mut buf).await.unwrap();
+        let raw = String::from_utf8_lossy(&buf[..n]).trim().to_string();
+        let msg: crate::models::client_message::ClientMessage = serde_json::from_str(&raw).unwrap();
+        assert_eq!(msg.command, "error");
+        assert_eq!(msg.data, "Invalid JSON format");
+    }
+}

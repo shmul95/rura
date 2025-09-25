@@ -65,6 +65,94 @@ async fn test_invalid_command_returns_error() {
 }
 
 #[tokio::test]
+async fn test_register_invalid_format_error() {
+    let (mut server_stream, mut client_stream) = create_stream_pair();
+    let conn = create_test_db().await;
+    let client_addr = test_socket_addr();
+
+    // Invalid JSON in data for register
+    let bad_register = ClientMessage {
+        command: "register".to_string(),
+        data: "not json".to_string(),
+    };
+
+    let result = handle_auth(&mut server_stream, conn, client_addr, &bad_register)
+        .await
+        .unwrap();
+    assert!(result.is_none());
+
+    let response = read_response(&mut client_stream).await;
+    let wrapper: ClientMessage = serde_json::from_str(&response).unwrap();
+    assert_eq!(wrapper.command, "auth_response");
+    let resp: AuthResponse = serde_json::from_str(&wrapper.data).unwrap();
+    assert!(!resp.success);
+    assert_eq!(resp.user_id, None);
+    assert!(resp.message.contains("Invalid"));
+}
+
+#[tokio::test]
+async fn test_login_invalid_format_error() {
+    let (mut server_stream, mut client_stream) = create_stream_pair();
+    let conn = create_test_db().await;
+    let client_addr = test_socket_addr();
+
+    // Invalid JSON in data for login
+    let bad_login = ClientMessage {
+        command: "login".to_string(),
+        data: "not json".to_string(),
+    };
+
+    let result = handle_auth(&mut server_stream, conn, client_addr, &bad_login)
+        .await
+        .unwrap();
+    assert!(result.is_none());
+
+    let response = read_response(&mut client_stream).await;
+    let wrapper: ClientMessage = serde_json::from_str(&response).unwrap();
+    assert_eq!(wrapper.command, "auth_response");
+    let resp: AuthResponse = serde_json::from_str(&wrapper.data).unwrap();
+    assert!(!resp.success);
+    assert_eq!(resp.user_id, None);
+    assert!(resp.message.contains("Invalid"));
+}
+
+#[tokio::test]
+async fn test_duplicate_registration_returns_error() {
+    let (mut server_stream, mut client_stream) = create_stream_pair();
+    let conn = create_test_db().await;
+    let client_addr = test_socket_addr();
+
+    let register_message = ClientMessage {
+        command: "register".to_string(),
+        data: serde_json::to_string(&AuthRequest {
+            passphrase: "dupuser".to_string(),
+            password: "pw".to_string(),
+        })
+        .unwrap(),
+    };
+
+    // First registration succeeds
+    let first = handle_auth(&mut server_stream, Arc::clone(&conn), client_addr, &register_message)
+        .await
+        .unwrap();
+    assert!(first.is_some());
+    let _ = read_response(&mut client_stream).await; // success auth_response
+
+    // Second registration attempt for same passphrase should fail
+    let second = handle_auth(&mut server_stream, conn, client_addr, &register_message)
+        .await
+        .unwrap();
+    assert!(second.is_none());
+
+    let response = read_response(&mut client_stream).await;
+    let wrapper: ClientMessage = serde_json::from_str(&response).unwrap();
+    assert_eq!(wrapper.command, "auth_response");
+    let resp: AuthResponse = serde_json::from_str(&wrapper.data).unwrap();
+    assert!(!resp.success);
+    assert!(resp.message.contains("already exists"));
+}
+
+#[tokio::test]
 async fn test_register_new_user_success() {
     let (mut server_stream, mut client_stream) = create_stream_pair();
     let conn = create_test_db().await;

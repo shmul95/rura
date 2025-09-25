@@ -99,4 +99,55 @@ mod tests {
         assert_eq!(resp.command, "error");
         assert_eq!(resp.data, "Invalid message format");
     }
+
+    #[tokio::test]
+    async fn test_invalid_envelope_sends_invalid_json_error() {
+        let state = Arc::new(AppState::default());
+        let (tx_out, mut rx_out) = mpsc::unbounded_channel::<ClientMessage>();
+
+        // Send completely invalid JSON (not a valid envelope)
+        handle_client_message(
+            Arc::clone(&state),
+            &tx_out,
+            test_addr(),
+            1,
+            b"not json",
+        )
+        .await
+        .unwrap();
+
+        let resp = timeout(Duration::from_millis(100), rx_out.recv())
+            .await
+            .expect("timed out waiting for outbound")
+            .expect("outbound channel closed");
+
+        assert_eq!(resp.command, "error");
+        assert_eq!(resp.data, "Invalid JSON");
+    }
+
+    #[tokio::test]
+    async fn test_non_message_command_is_echoed() {
+        let state = Arc::new(AppState::default());
+        let (tx_out, mut rx_out) = mpsc::unbounded_channel::<ClientMessage>();
+
+        let envelope = ClientMessage { command: "ping".to_string(), data: "hello".to_string() };
+        let wire = serde_json::to_string(&envelope).unwrap();
+
+        handle_client_message(
+            Arc::clone(&state),
+            &tx_out,
+            test_addr(),
+            42,
+            wire.as_bytes(),
+        )
+        .await
+        .unwrap();
+
+        let resp = timeout(Duration::from_millis(100), rx_out.recv())
+            .await
+            .expect("timed out waiting for outbound")
+            .expect("outbound channel closed");
+        assert_eq!(resp.command, "ping");
+        assert_eq!(resp.data, "hello");
+    }
 }
