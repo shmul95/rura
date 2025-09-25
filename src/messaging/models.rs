@@ -6,9 +6,8 @@ pub struct DirectMessageReq {
     pub body: String,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct DirectMessageEvent {
     pub from_user_id: i64,
     pub body: String,
 }
-

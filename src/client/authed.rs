@@ -56,3 +56,47 @@ pub(super) async fn handle_client_message(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+    use tokio::time::{timeout, Duration};
+
+    fn test_addr() -> SocketAddr {
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8080)
+    }
+
+    #[tokio::test]
+    async fn test_invalid_message_format_sends_error_to_sender() {
+        let state = Arc::new(AppState::default());
+        let (tx_out, mut rx_out) = mpsc::unbounded_channel::<ClientMessage>();
+
+        // Build a ClientMessage with command "message" but invalid JSON in data
+        let wire = ClientMessage {
+            command: "message".to_string(),
+            data: "not json".to_string(),
+        };
+        let wire_str = serde_json::to_string(&wire).unwrap();
+
+        // Call the handler as if it received this line
+        handle_client_message(
+            Arc::clone(&state),
+            &tx_out,
+            test_addr(),
+            1,
+            wire_str.as_bytes(),
+        )
+        .await
+        .unwrap();
+
+        // Expect an error response to be queued back to the sender via outbound
+        let resp = timeout(Duration::from_millis(100), rx_out.recv())
+            .await
+            .expect("timed out waiting for outbound")
+            .expect("outbound channel closed");
+
+        assert_eq!(resp.command, "error");
+        assert_eq!(resp.data, "Invalid message format");
+    }
+}
