@@ -6,10 +6,9 @@ A small asynchronous TCP server written in Rust (Tokio) with:
 - Simple newline-delimited JSON protocol
 
 Quick links
-- Protocol: PROTOCOL.md
-- Architecture: ARCHITECTURE.md
-- Auth overview: README_AUTH.md
-- Database overview: README_DB.md
+- Protocol: [PROTOCOL.md](PROTOCOL.md)
+- Architecture: [ARCHITECTURE.md](ARCHITECTURE.md)
+- Database & Auth: [DATABASE.md](DATABASE.md)
 
 ## Quick Start
 
@@ -48,7 +47,7 @@ Login instead of register (if users already exist)
   - Invalid message payload → `error: Invalid message format`
   - Unknown recipient → dropped silently (no ack)
 
-Full details: PROTOCOL.md
+Full details: [PROTOCOL.md](PROTOCOL.md)
 
 ## Architecture Summary
 - Connection lifecycle and read/write loop: `src/client/*`
@@ -57,7 +56,7 @@ Full details: PROTOCOL.md
 - DB helpers: `src/utils/db_utils.rs`
 - Models: `src/models/*`
 
-See: ARCHITECTURE.md for a module-by-module map and flow.
+See: [ARCHITECTURE.md](ARCHITECTURE.md) for a module-by-module map and flow.
 
 ## Development
 - Format: `cargo fmt`

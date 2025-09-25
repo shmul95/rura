@@ -7,9 +7,9 @@ This document summarizes what each module and file does, and how requests flow t
   - Parses CLI args, initializes DB (`init_db`) and in-memory `AppState`, starts TCP listener, and spawns a task per connection calling `client::handle_client`.
 - src/lib.rs
   - Re-exports modules: `auth`, `client`, `messaging`, `models`, `utils`.
-- PROTOCOL.md
+- [PROTOCOL.md](PROTOCOL.md)
   - Wire protocol for authentication, direct messaging, and error handling (newline-delimited JSON with `{command, data}` envelope).
-- README_AUTH.md / README_DB.md
+- [DATABASE.md](DATABASE.md)
   - Overviews for authentication flow and database schema/utilities.
 
 ## Client (Connection Orchestration)
