@@ -32,6 +32,7 @@ This document summarizes what each module and file does, and how requests flow t
   - `handle_client_message(state, outbound, client_addr, user_id, buffer)`
     - Parses the top-level envelope and dispatches post-auth commands:
       - `message`: parse `DirectMessageReq` and call `messaging::handlers::send_direct`.
+      - `save`: parse `SaveRequest` and update the `saved` flag via `db_utils::set_message_saved`, respond with `save_response`.
       - other commands: echoed back to the sender via the outbound channel.
     - Sends `{"command":"error","data":"Invalid message format"}` for malformed message payloads.
 - src/client/io_helpers.rs
@@ -74,6 +75,7 @@ This document summarizes what each module and file does, and how requests flow t
   - `init_db()` creates tables: `users`, `messages` (reserved), `connections`.
   - Adds `saved` column to `messages` if missing (migration for older DBs).
   - `store_message(conn, from_user_id, to_user_id, content, saved)` persists direct messages.
+  - `set_message_saved(conn, user_id, message_id, saved)` marks/unmarks a message owned by `user_id`.
   - `log_client_connection(client_addr)` records incoming connection IP and timestamp.
   - `register_user`, `authenticate_user` implement credential storage and validation (Argon2).
 - src/utils/get_local_ip.rs

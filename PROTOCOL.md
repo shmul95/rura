@@ -53,6 +53,21 @@ Acknowledgements & Persistence
 - Unknown recipient (offline/unknown `to_user_id`): delivery is skipped, but the message is still persisted.
 - All direct messages are persisted with an ISO 8601 `timestamp`. A `saved` flag is stored (default false).
 
+## Save Command
+
+Clients can mark/unmark a message as saved.
+
+Client → Server
+- `{"command":"save","data":"{\"message_id\":123,\"saved\":true}"}`
+  - `saved` defaults to true if omitted.
+
+Server → Client
+- `{"command":"save_response","data":"{\"success\":true,\"message\":\"Message updated\",\"message_id\":123,\"saved\":true}"}`
+- On failure (message not found or not owned by the caller):
+  - `{"command":"save_response","data":"{\"success\":false,\"message\":\"Message not found or not authorized\",\"message_id\":123,\"saved\":true}"}`
+- Invalid request format:
+  - `{"command":"error","data":"Invalid save format"}`
+
 Error cases (post-auth)
 - Malformed `message` request (invalid `data` JSON):
   - Sent back to the sender:
