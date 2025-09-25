@@ -57,9 +57,10 @@ This document summarizes what each module and file does, and how requests flow t
   - `DirectMessageReq { to_user_id, body }`
   - `DirectMessageEvent { from_user_id, body }`
 - src/messaging/handlers.rs
-  - `send_direct(state, from_user_id, DirectMessageReq)`
+  - `send_direct(state, conn, from_user_id, DirectMessageReq)`
+    - Persists the message to the `messages` table with `saved` flag (default false).
     - If the recipient is online, pushes a `ClientMessage { command: "message", data: DirectMessageEvent as JSON }` into their outbound channel.
-    - If the recipient is offline/unknown, no-op (no sender ack in this minimal version).
+    - If the recipient is offline/unknown, delivery is skipped but the message remains persisted.
 
 ## Models
 - src/models/client_message.rs
@@ -71,6 +72,8 @@ This document summarizes what each module and file does, and how requests flow t
 ## Utils (Database/Helpers)
 - src/utils/db_utils.rs
   - `init_db()` creates tables: `users`, `messages` (reserved), `connections`.
+  - Adds `saved` column to `messages` if missing (migration for older DBs).
+  - `store_message(conn, from_user_id, to_user_id, content, saved)` persists direct messages.
   - `log_client_connection(client_addr)` records incoming connection IP and timestamp.
   - `register_user`, `authenticate_user` implement credential storage and validation (Argon2).
 - src/utils/get_local_ip.rs

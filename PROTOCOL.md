@@ -41,14 +41,17 @@ State
 Client → Server (send)
 - Direct message request (inside `data`):
   - `{"command":"message","data":"{\"to_user_id\":3,\"body\":\"hello world\"}"}`
+  - Optional: `saved` boolean to request marking the message as saved
+    - `{"command":"message","data":"{\"to_user_id\":3,\"body\":\"hi\",\"saved\":true}"}`
 
 Server → Recipient (deliver)
 - Direct message event (inside `data`):
   - `{"command":"message","data":"{\"from_user_id\":1,\"body\":\"hello world\"}"}`
 
-Acknowledgements
+Acknowledgements & Persistence
 - Minimal implementation: no sender acknowledgement on success, and no explicit error for unknown recipients.
-- Unknown recipient (offline/unknown `to_user_id`): message is dropped silently.
+- Unknown recipient (offline/unknown `to_user_id`): delivery is skipped, but the message is still persisted.
+- All direct messages are persisted with an ISO 8601 `timestamp`. A `saved` flag is stored (default false).
 
 Error cases (post-auth)
 - Malformed `message` request (invalid `data` JSON):
@@ -66,4 +69,3 @@ Error cases (post-auth)
 - Envelope stability ensures additional commands can be added without breaking parsing.
 - A persistence layer can add offline delivery with `delivered_at`/`read_at` fields in the future.
 - Optional presence events (`presence` command) can be added without changing existing clients.
-

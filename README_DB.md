@@ -20,8 +20,11 @@ See also:
 - `sender` / `receiver` INTEGER: foreign keys to `users.id`
 - `content` TEXT: arbitrary JSON payload
 - `timestamp` TEXT: ISO 8601 timestamp
+- `saved` INTEGER (0/1): whether the message is marked to keep beyond the transient window
 
-> The `messages` table is provisioned for chat history, but the current server flow does not yet insert or query it.
+Notes:
+- Existing databases created before this change are auto-migrated to add the `saved` column on startup.
+- The server persists each direct message on send; delivery to offline users is not yet implemented.
 
 ### `connections`
 - `id` INTEGER PRIMARY KEY AUTOINCREMENT
