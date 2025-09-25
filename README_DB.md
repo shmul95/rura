@@ -5,6 +5,10 @@
 - `init_db` (see `src/utils/db_utils.rs`) auto-creates the tables when they are missing.
 - A single SQLite connection is wrapped in `Arc<Mutex<Connection>>` so Tokio tasks can share it safely.
 
+See also:
+- Protocol: PROTOCOL.md
+- Architecture: ARCHITECTURE.md
+
 ## Table Schemas
 ### `users`
 - `id` INTEGER PRIMARY KEY AUTOINCREMENT
