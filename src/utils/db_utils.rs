@@ -175,6 +175,20 @@ pub async fn store_message(
     Ok(conn.last_insert_rowid())
 }
 
+pub async fn set_message_saved(
+    conn: Arc<Mutex<Connection>>,
+    user_id: i64,
+    message_id: i64,
+    saved: bool,
+) -> SqliteResult<bool> {
+    let conn = conn.lock().unwrap();
+    let updated = conn.execute(
+        "UPDATE messages SET saved = ?1 WHERE id = ?2 AND (sender = ?3 OR receiver = ?3)",
+        params![if saved { 1 } else { 0 }, message_id, user_id],
+    )?;
+    Ok(updated == 1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

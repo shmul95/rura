@@ -4,10 +4,11 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
 use crate::messaging::handlers::send_direct;
-use crate::messaging::models::DirectMessageReq;
+use crate::messaging::models::{DirectMessageReq, SaveRequest, SaveResponse};
 use crate::messaging::state::AppState;
 use crate::models::client_message::ClientMessage;
 use rusqlite::Connection;
+use crate::utils::db_utils::set_message_saved;
 
 pub(super) async fn handle_client_message(
     state: Arc<AppState>,
@@ -41,6 +42,61 @@ pub(super) async fn handle_client_message(
                         }
                     }
                 }
+                "save" => {
+                    match serde_json::from_str::<SaveRequest>(&msg.data) {
+                        Ok(req) => {
+                            let saved_flag = req.saved.unwrap_or(true);
+                            match set_message_saved(Arc::clone(&conn), user_id, req.message_id, saved_flag).await {
+                                Ok(true) => {
+                                    let resp = SaveResponse {
+                                        success: true,
+                                        message: "Message updated".to_string(),
+                                        message_id: Some(req.message_id),
+                                        saved: Some(saved_flag),
+                                    };
+                                    let wrapper = ClientMessage {
+                                        command: "save_response".to_string(),
+                                        data: serde_json::to_string(&resp).unwrap(),
+                                    };
+                                    let _ = outbound.send(wrapper);
+                                }
+                                Ok(false) => {
+                                    let resp = SaveResponse {
+                                        success: false,
+                                        message: "Message not found or not authorized".to_string(),
+                                        message_id: Some(req.message_id),
+                                        saved: Some(saved_flag),
+                                    };
+                                    let wrapper = ClientMessage {
+                                        command: "save_response".to_string(),
+                                        data: serde_json::to_string(&resp).unwrap(),
+                                    };
+                                    let _ = outbound.send(wrapper);
+                                }
+                                Err(_) => {
+                                    let resp = SaveResponse {
+                                        success: false,
+                                        message: "Failed to update message".to_string(),
+                                        message_id: Some(req.message_id),
+                                        saved: Some(saved_flag),
+                                    };
+                                    let wrapper = ClientMessage {
+                                        command: "save_response".to_string(),
+                                        data: serde_json::to_string(&resp).unwrap(),
+                                    };
+                                    let _ = outbound.send(wrapper);
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            let err = ClientMessage {
+                                command: "error".to_string(),
+                                data: "Invalid save format".to_string(),
+                            };
+                            let _ = outbound.send(err);
+                        }
+                    }
+                }
                 // default: echo back via outbound to keep behavior simple
                 _ => {
                     let _ = outbound.send(msg);
@@ -65,7 +121,8 @@ mod tests {
     use super::*;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use tokio::time::{Duration, timeout};
-
+    use crate::messaging::models::SaveRequest;
+    
     fn test_addr() -> SocketAddr {
         SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8080)
     }
@@ -185,5 +242,86 @@ mod tests {
             .expect("outbound channel closed");
         assert_eq!(resp.command, "ping");
         assert_eq!(resp.data, "hello");
+    }
+
+    #[tokio::test]
+    async fn test_save_command_success_and_unauthorized() {
+        let state = Arc::new(AppState::default());
+        let conn = Arc::new(Mutex::new(Connection::open(":memory:").unwrap()));
+        {
+            let c = conn.lock().unwrap();
+            c.execute(
+                "CREATE TABLE IF NOT EXISTS messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    sender INTEGER NOT NULL,
+                    receiver INTEGER NOT NULL,
+                    content TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    saved INTEGER NOT NULL DEFAULT 0
+                )",
+                [],
+            )
+            .unwrap();
+            c.execute(
+                "INSERT INTO messages (sender, receiver, content, timestamp, saved) VALUES (1, 2, 'hi', '2024-01-01T00:00:00Z', 0)",
+                [],
+            )
+            .unwrap();
+        }
+
+        // Prepare outbound
+        let (tx_out, mut rx_out) = mpsc::unbounded_channel::<ClientMessage>();
+
+        // Compose save request for message id 1 by sender user 1
+        let save_req = SaveRequest { message_id: 1, saved: Some(true) };
+        let wire = ClientMessage {
+            command: "save".to_string(),
+            data: serde_json::to_string(&save_req).unwrap(),
+        };
+        let wire_str = serde_json::to_string(&wire).unwrap();
+
+        // Successful save by authorized user
+        handle_client_message(
+            Arc::clone(&state),
+            Arc::clone(&conn),
+            &tx_out,
+            test_addr(),
+            1,
+            wire_str.as_bytes(),
+        )
+        .await
+        .unwrap();
+
+        let resp = timeout(Duration::from_millis(100), rx_out.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(resp.command, "save_response");
+        let parsed: crate::messaging::models::SaveResponse = serde_json::from_str(&resp.data).unwrap();
+        assert!(parsed.success);
+        assert_eq!(parsed.message_id, Some(1));
+        assert_eq!(parsed.saved, Some(true));
+
+        // Now attempt unauthorized save by user 99
+        let (tx_out2, mut rx_out2) = mpsc::unbounded_channel::<ClientMessage>();
+        handle_client_message(
+            Arc::clone(&state),
+            Arc::clone(&conn),
+            &tx_out2,
+            test_addr(),
+            99,
+            wire_str.as_bytes(),
+        )
+        .await
+        .unwrap();
+
+        let resp2 = timeout(Duration::from_millis(100), rx_out2.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(resp2.command, "save_response");
+        let parsed2: crate::messaging::models::SaveResponse = serde_json::from_str(&resp2.data).unwrap();
+        assert!(!parsed2.success);
+        assert_eq!(parsed2.message_id, Some(1));
     }
 }
