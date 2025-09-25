@@ -13,7 +13,7 @@ pub struct DirectMessageEvent {
     pub body: String,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct SaveRequest {
     pub message_id: i64,
     pub saved: Option<bool>, // default true when omitted
