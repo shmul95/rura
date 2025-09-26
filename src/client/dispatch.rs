@@ -21,7 +21,15 @@ pub(super) async fn handle_read_success(
     if let Some(user_id) = *authenticated_user_id {
         // User is authenticated, allow normal communication
         let tx = outbound_tx.expect("outbound sender not set for authenticated user");
-        authed::handle_client_message(Arc::clone(&state), tx, client_addr, user_id, buffer).await
+        authed::handle_client_message(
+            Arc::clone(&state),
+            Arc::clone(&conn),
+            tx,
+            client_addr,
+            user_id,
+            buffer,
+        )
+        .await
     } else {
         // User not authenticated, only allow auth commands
         let received = String::from_utf8_lossy(buffer).to_string();

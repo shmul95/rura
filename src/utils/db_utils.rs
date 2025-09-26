@@ -20,7 +20,7 @@ fn init_db_with_path<P: AsRef<std::path::Path>>(path: P) -> SqliteResult<Connect
         [],
     )?;
 
-    // Create messages table
+    // Create messages table (legacy columns sender/receiver) if missing
     conn.execute(
         "CREATE TABLE IF NOT EXISTS messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -28,11 +28,32 @@ fn init_db_with_path<P: AsRef<std::path::Path>>(path: P) -> SqliteResult<Connect
             receiver INTEGER NOT NULL,
             content TEXT NOT NULL,
             timestamp TEXT NOT NULL,
+            saved INTEGER NOT NULL DEFAULT 0,
             FOREIGN KEY(sender) REFERENCES users(id),
             FOREIGN KEY(receiver) REFERENCES users(id)
         )",
         [],
     )?;
+
+    // Ensure `saved` column exists for older databases
+    {
+        let mut stmt = conn.prepare("PRAGMA table_info(messages)")?;
+        let mut rows = stmt.query([])?;
+        let mut has_saved = false;
+        while let Some(row) = rows.next()? {
+            let col_name: String = row.get(1)?;
+            if col_name == "saved" {
+                has_saved = true;
+                break;
+            }
+        }
+        if !has_saved {
+            conn.execute(
+                "ALTER TABLE messages ADD COLUMN saved INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
+    }
 
     // Create connections table
     conn.execute(
@@ -139,6 +160,36 @@ pub async fn authenticate_user(
     } else {
         Ok(None)
     }
+}
+
+pub async fn store_message(
+    conn: Arc<Mutex<Connection>>,
+    from_user_id: i64,
+    to_user_id: i64,
+    content: &str,
+    saved: bool,
+) -> SqliteResult<i64> {
+    let ts = chrono::Local::now().to_rfc3339();
+    let conn = conn.lock().unwrap();
+    conn.execute(
+        "INSERT INTO messages (sender, receiver, content, timestamp, saved) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![from_user_id, to_user_id, content, ts, if saved { 1 } else { 0 }],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub async fn set_message_saved(
+    conn: Arc<Mutex<Connection>>,
+    user_id: i64,
+    message_id: i64,
+    saved: bool,
+) -> SqliteResult<bool> {
+    let conn = conn.lock().unwrap();
+    let updated = conn.execute(
+        "UPDATE messages SET saved = ?1 WHERE id = ?2 AND (sender = ?3 OR receiver = ?3)",
+        params![if saved { 1 } else { 0 }, message_id, user_id],
+    )?;
+    Ok(updated == 1)
 }
 
 #[cfg(test)]
