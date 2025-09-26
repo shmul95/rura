@@ -141,7 +141,11 @@ async fn test_full_auth_and_dm_persistence_and_save() {
             .query_row("SELECT COUNT(*) FROM messages", [], |row| row.get(0))
             .unwrap();
         let s: i64 = guard
-            .query_row("SELECT saved FROM messages ORDER BY id DESC LIMIT 1", [], |row| row.get(0))
+            .query_row(
+                "SELECT saved FROM messages ORDER BY id DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
             .unwrap();
         (c, s)
     };
@@ -160,11 +164,9 @@ async fn test_full_auth_and_dm_persistence_and_save() {
     let new_saved: i64 = {
         let guard = db.lock().unwrap();
         guard
-            .query_row(
-                "SELECT saved FROM messages WHERE id = 1",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT saved FROM messages WHERE id = 1", [], |row| {
+                row.get(0)
+            })
             .unwrap()
     };
     assert_eq!(new_saved, 0);
@@ -172,4 +174,3 @@ async fn test_full_auth_and_dm_persistence_and_save() {
     // Silence warnings
     let _ = uid1;
 }
-
