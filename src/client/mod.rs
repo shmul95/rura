@@ -13,7 +13,7 @@ mod io_helpers;
 mod loop_task;
 mod unauth;
 
-pub async fn handle_client_with_addr<S>(
+pub async fn handle_client<S>(
     mut stream: S,
     conn: Arc<Mutex<Connection>>,
     state: Arc<AppState>,
@@ -44,12 +44,4 @@ where
     Ok(())
 }
 
-// Back-compat wrapper for call sites expecting a TcpStream and deriving the address internally
-pub async fn handle_client(
-    stream: tokio::net::TcpStream,
-    conn: Arc<Mutex<Connection>>,
-    state: Arc<AppState>,
-) -> tokio::io::Result<()> {
-    let client_addr = stream.peer_addr()?;
-    handle_client_with_addr(stream, conn, state, client_addr).await
-}
+// (Old back-compat wrapper removed)

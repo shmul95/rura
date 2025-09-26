@@ -1,4 +1,4 @@
-use rura::client::handle_client_with_addr;
+use rura::client::handle_client;
 use rura::messaging::state::AppState;
 use rura::models::client_message::{AuthRequest, AuthResponse, ClientMessage};
 use rusqlite::Connection;
@@ -75,7 +75,7 @@ async fn test_full_auth_and_dm_persistence_and_save() {
             let db = Arc::clone(&db_for_server);
             let state = Arc::clone(&state_for_server);
             tokio::spawn(async move {
-                let _ = handle_client_with_addr(stream, db, state, peer).await;
+                let _ = handle_client(stream, db, state, peer).await;
             });
         }
     });
