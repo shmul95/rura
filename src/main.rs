@@ -1,12 +1,14 @@
 use clap::Parser;
 use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
+use tokio_rustls::TlsAcceptor;
 
 use rura::client::handle_client;
 use rura::messaging::state::AppState;
 use rura::models::args::Args;
 use rura::utils::db_utils::init_db;
 use rura::utils::get_local_ip::get_local_ip;
+use rura::utils::tls::make_tls_acceptor;
 
 #[tokio::main]
 async fn main() -> tokio::io::Result<()> {
@@ -24,6 +26,10 @@ async fn main() -> tokio::io::Result<()> {
     // Initialize shared in-memory state (online users)
     let state = Arc::new(AppState::default());
 
+    // Build TLS acceptor (TLS-only server)
+    let tls_acceptor: TlsAcceptor = make_tls_acceptor(&args.tls_cert, &args.tls_key)
+        .expect("Failed to initialize TLS (check --tls-cert/--tls-key)");
+
     // Start TCP listener
     let listener = TcpListener::bind(&bind_addr).await?;
     println!(
@@ -34,12 +40,20 @@ async fn main() -> tokio::io::Result<()> {
     // Accept connections
     loop {
         let (stream, client_addr) = listener.accept().await?;
-        let conn = Arc::clone(&conn); // Clone connection for each task
+        let conn = Arc::clone(&conn);
         let state = Arc::clone(&state);
+        let acceptor = tls_acceptor.clone();
 
         tokio::spawn(async move {
-            if let Err(e) = handle_client(stream, conn, state).await {
-                eprintln!("Error handling client {}: {}", client_addr, e);
+            match acceptor.accept(stream).await {
+                Ok(tls_stream) => {
+                    if let Err(e) = handle_client(tls_stream, conn, state, client_addr).await {
+                        eprintln!("Error handling TLS client {}: {}", client_addr, e);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("TLS handshake failed with {}: {}", client_addr, e);
+                }
             }
         });
     }

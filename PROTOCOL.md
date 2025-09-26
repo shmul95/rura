@@ -3,7 +3,7 @@
 This document defines the on-the-wire protocol for authentication, direct messaging, and error reporting.
 
 ## Transport
-- TCP with newline-delimited JSON (one JSON object per line).
+- TLS (server-only) over TCP with newline-delimited JSON (one JSON object per line).
 - Envelope type for all messages:
   - `{ "command": String, "data": String }`
   - `data` carries a JSON-encoded payload as a string (double-encoded JSON) to keep the envelope stable.
