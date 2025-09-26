@@ -13,7 +13,7 @@ mod io_helpers;
 mod loop_task;
 mod unauth;
 
-pub async fn handle_client<S>(
+pub async fn handle_client_with_addr<S>(
     mut stream: S,
     conn: Arc<Mutex<Connection>>,
     state: Arc<AppState>,
@@ -22,7 +22,6 @@ pub async fn handle_client<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-
     // Log client connection to SQLite
     log_client_connection(Arc::clone(&conn), client_addr)
         .await
@@ -43,4 +42,14 @@ where
     // Handle client authentication and subsequent messages
     loop_task::handle_client_loop(&mut stream, Arc::clone(&conn), state, client_addr).await?;
     Ok(())
+}
+
+// Back-compat wrapper for call sites expecting a TcpStream and deriving the address internally
+pub async fn handle_client(
+    stream: tokio::net::TcpStream,
+    conn: Arc<Mutex<Connection>>,
+    state: Arc<AppState>,
+) -> tokio::io::Result<()> {
+    let client_addr = stream.peer_addr()?;
+    handle_client_with_addr(stream, conn, state, client_addr).await
 }

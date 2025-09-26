@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
 
-use rura::client::handle_client;
+use rura::client::handle_client_with_addr;
 use rura::messaging::state::AppState;
 use rura::models::args::Args;
 use rura::utils::db_utils::init_db;
@@ -47,7 +47,9 @@ async fn main() -> tokio::io::Result<()> {
         tokio::spawn(async move {
             match acceptor.accept(stream).await {
                 Ok(tls_stream) => {
-                    if let Err(e) = handle_client(tls_stream, conn, state, client_addr).await {
+                    if let Err(e) =
+                        handle_client_with_addr(tls_stream, conn, state, client_addr).await
+                    {
                         eprintln!("Error handling TLS client {}: {}", client_addr, e);
                     }
                 }

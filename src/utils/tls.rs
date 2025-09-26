@@ -2,15 +2,14 @@ use std::fs::File;
 use std::io::{self, BufReader};
 use std::sync::Arc;
 
-use rustls::pki_types::{CertificateDer, PrivateKeyDer};
-use rustls::ServerConfig;
 use tokio_rustls::TlsAcceptor;
+use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use tokio_rustls::rustls::{self, ServerConfig};
 
 fn load_certs(path: &str) -> io::Result<Vec<CertificateDer<'static>>> {
-    let file = File::open(path)?;
-    let mut reader = BufReader::new(file);
-    let certs = rustls_pemfile::certs(&mut reader)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("failed to read certs: {e}")))?;
+    let mut reader = BufReader::new(File::open(path)?);
+    let certs: Vec<CertificateDer<'static>> =
+        rustls_pemfile::certs(&mut reader).collect::<Result<Vec<_>, _>>()?;
     if certs.is_empty() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -22,21 +21,18 @@ fn load_certs(path: &str) -> io::Result<Vec<CertificateDer<'static>>> {
 
 fn load_private_key(path: &str) -> io::Result<PrivateKeyDer<'static>> {
     // Try PKCS#8 first
-    let file = File::open(path)?;
-    let mut reader = BufReader::new(file);
-    let mut keys = rustls_pemfile::pkcs8_private_keys(&mut reader)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("failed to read pkcs8 key: {e}")))?;
-    if let Some(key) = keys.pop() {
-        return Ok(key);
+    let mut reader = BufReader::new(File::open(path)?);
+    let mut pkcs8 =
+        rustls_pemfile::pkcs8_private_keys(&mut reader).collect::<Result<Vec<_>, _>>()?;
+    if let Some(key) = pkcs8.pop() {
+        return Ok(PrivateKeyDer::from(key));
     }
 
     // Fallback to RSA (PKCS#1)
-    let file = File::open(path)?;
-    let mut reader = BufReader::new(file);
-    let mut keys = rustls_pemfile::rsa_private_keys(&mut reader)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("failed to read rsa key: {e}")))?;
-    if let Some(key) = keys.pop() {
-        return Ok(key);
+    let mut reader = BufReader::new(File::open(path)?);
+    let mut rsa = rustls_pemfile::rsa_private_keys(&mut reader).collect::<Result<Vec<_>, _>>()?;
+    if let Some(key) = rsa.pop() {
+        return Ok(PrivateKeyDer::from(key));
     }
 
     Err(io::Error::new(
@@ -52,8 +48,12 @@ pub fn make_tls_acceptor(cert_path: &str, key_path: &str) -> io::Result<TlsAccep
     let config: ServerConfig = rustls::ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(certs, key)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("invalid cert/key: {e}")))?;
+        .map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("invalid cert/key: {e}"),
+            )
+        })?;
 
     Ok(TlsAcceptor::from(Arc::new(config)))
 }
-
