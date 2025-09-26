@@ -12,8 +12,11 @@ Quick links
 
 ## Quick Start
 
-Build and run
-- `cargo run -- --port 8080` (default: 8080)
+Build and run (TLS-only)
+- Generate a self-signed cert (dev):
+  - `openssl req -x509 -newkey rsa:2048 -keyout server.key -out server.crt -days 365 -nodes -subj '/CN=localhost'`
+- Start the server (TLS only):
+  - `cargo run -- --port 8443 --tls-cert server.crt --tls-key server.key`
 
 Try it with two terminals (Alice and Bob)
 - In two shells: `nc 127.0.0.1 8080`
@@ -92,6 +95,7 @@ See: [ARCHITECTURE.md](ARCHITECTURE.md) for a module-by-module map and flow.
 
 ## Configuration
 - CLI: `--port <PORT>` (default 8080). See `src/models/args.rs`.
+- TLS (required): `--tls-cert <PATH>` and `--tls-key <PATH>` (PEM; PKCS#8 or RSA key). The server refuses to start without them.
 
 ## Limitations
 - Delivery occurs only to online users (no offline delivery yet), but messages are persisted in the database with a `saved` flag.
