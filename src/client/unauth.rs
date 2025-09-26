@@ -1,29 +1,35 @@
 use rusqlite::Connection;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncWrite, AsyncWriteExt};
 
 use crate::auth::handle_auth;
 use crate::models::client_message::ClientMessage;
 
-pub(super) async fn handle_unauthenticated_message(
-    stream: &mut tokio::net::TcpStream,
+pub(super) async fn handle_unauthenticated_message<W>(
+    stream: &mut W,
     conn: Arc<Mutex<Connection>>,
     client_addr: SocketAddr,
     msg: ClientMessage,
     authenticated_user_id: &mut Option<i64>,
-) -> tokio::io::Result<()> {
+) -> tokio::io::Result<()>
+where
+    W: AsyncWrite + Unpin,
+{
     if let Some(user_id) = handle_auth(stream, Arc::clone(&conn), client_addr, &msg).await? {
         *authenticated_user_id = Some(user_id);
     }
     Ok(())
 }
 
-pub(super) async fn handle_unauthenticated_parse_error(
-    stream: &mut tokio::net::TcpStream,
+pub(super) async fn handle_unauthenticated_parse_error<W>(
+    stream: &mut W,
     client_addr: SocketAddr,
     e: serde_json::Error,
-) -> tokio::io::Result<()> {
+) -> tokio::io::Result<()>
+where
+    W: AsyncWrite + Unpin,
+{
     eprintln!("Invalid JSON from {}: {}", client_addr, e);
     let error_msg = ClientMessage {
         command: "error".to_string(),

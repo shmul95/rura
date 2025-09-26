@@ -1,7 +1,7 @@
 use rusqlite::Connection;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::select;
 use tokio::sync::mpsc;
 
@@ -9,12 +9,15 @@ use crate::messaging::state::{AppState, ClientHandle};
 
 use super::{dispatch, io_helpers};
 
-pub(super) async fn handle_client_loop(
-    stream: &mut tokio::net::TcpStream,
+pub(super) async fn handle_client_loop<S>(
+    stream: &mut S,
     conn: Arc<Mutex<Connection>>,
     state: Arc<AppState>,
     client_addr: SocketAddr,
-) -> tokio::io::Result<()> {
+) -> tokio::io::Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     let mut buffer = [0; 1024];
     let mut authenticated_user_id: Option<i64> = None;
     let mut outbound_tx: Option<
