@@ -9,6 +9,7 @@ Quick links
 - Protocol: [docs/PROTOCOL.md](docs/PROTOCOL.md)
 - Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - Database & Auth: [docs/DATABASE.md](docs/DATABASE.md)
+- Flutter/FRB Setup: [docs/FRB_SETUP.md](docs/FRB_SETUP.md)
 
 ## Quick Start
 
