@@ -7,7 +7,7 @@ use rustls::pki_types::{CertificateDer, ServerName};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
-use std::sync::Arc;
+use std::sync::{Arc, Once};
 
 /// Minimal function to validate FRB wiring.
 #[frb]
@@ -71,6 +71,11 @@ pub fn login_tls(
     passphrase: String,
     password: String,
 ) -> Result<LoginResponse, String> {
+    // Ensure a crypto provider is installed (rustls 0.23 requires this)
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
     // Build TLS client config with provided root
     let roots = build_root_store_from_pem(&ca_pem)?;
     let config: ClientConfig = ClientConfig::builder()
@@ -115,5 +120,11 @@ pub fn login_tls(
     }
     let resp: AuthResponse = serde_json::from_str(&wrapper.data)
         .map_err(|e| format!("Invalid auth_response data: {e}"))?;
+
+    // Send a graceful TLS close_notify before dropping the connection so the
+    // server does not report an unexpected EOF warning.
+    tls.conn.send_close_notify();
+    let _ = tls.flush();
+
     Ok(LoginResponse { success: resp.success, message: resp.message, user_id: resp.user_id })
 }

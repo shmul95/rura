@@ -31,7 +31,8 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   final _host = TextEditingController(text: 'localhost');
   final _port = TextEditingController(text: '8443');
-  final _certPath = TextEditingController(text: '../../server/server.crt');
+  // Default to the local CA certificate used to sign the server leaf
+  final _certPath = TextEditingController(text: '../ca.crt');
   final _passphrase = TextEditingController(text: 'alice');
   final _password = TextEditingController(text: 'secret');
   String _status = 'Ready';
