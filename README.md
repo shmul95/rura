@@ -15,8 +15,10 @@ Quick links
 Build and run (TLS-only)
 - Generate a self-signed cert (dev):
   - `openssl req -x509 -newkey rsa:2048 -keyout server.key -out server.crt -days 365 -nodes -subj '/CN=localhost'`
-- Start the server (crate `rura`):
-  - `cargo run -p rura -- --port 8443 --tls-cert server.crt --tls-key server.key`
+- Start the server (from server crate):
+  - `cd crates/server`
+  - `cargo run -- --port 8443 --tls-cert server.crt --tls-key server.key`
+  - If your certs are at repo root, use: `cargo run -- --port 8443 --tls-cert ../../server.crt --tls-key ../../server.key`
 
 Connect with TLS (two terminals)
 - Open two TLS clients using OpenSSL:
@@ -55,38 +57,37 @@ Full details: [PROTOCOL.md](PROTOCOL.md)
 
 ## Architecture Summary
 - Workspace
-  - `crates/rura_server` (crate name: `rura`): server binary + modules
-  - `crates/rura_models`: shared protocol DTOs
-  - `crates/rura_client`: Rust client SDK (skeleton for FRB)
+  - `crates/server` (crate name: `rura_server`): server binary + modules
+  - `crates/models` (crate name: `rura_models`): shared protocol DTOs
+  - `crates/client` (crate name: `rura_client`): Rust client SDK (skeleton for FRB)
 - Server modules (`rura`)
-  - Connection lifecycle: `crates/rura_server/src/client/*`
-  - Auth logic: `crates/rura_server/src/auth/*`
-  - Messaging: `crates/rura_server/src/messaging/*`
-  - DB/TLS/IP utils: `crates/rura_server/src/utils/*`
-  - CLI args: `crates/rura_server/src/models/args.rs`
-- Shared models (re-exported from `rura`)
-  - `rura::models::client_message::*` and `rura::messaging::models::*`
+  - Connection lifecycle: `crates/server/src/client/*`
+  - Auth logic: `crates/server/src/auth/*`
+  - Messaging: `crates/server/src/messaging/*`
+  - DB/TLS/IP utils: `crates/server/src/utils/*`
+  - CLI args: `crates/server/src/models/args.rs`
+- Shared models (re-exported from `rura_server`)
+  - `rura_server::models::client_message::*` and `rura_server::messaging::models::*`
 
 See: [ARCHITECTURE.md](ARCHITECTURE.md) for a module-by-module map and flow.
 
 ## Development
 - Format: `cargo fmt --all`
 - Lint: `cargo clippy --all-targets --all-features -- -D warnings`
-- Test (workspace): `cargo test`
-- Test (server crate only): `cargo test -p rura`
+- Test (server crate): `cd crates/server && cargo test`
 - Toolchain: stable Rust; rusqlite uses the `bundled` feature (no external SQLite needed)
 
 ## Tests & Coverage
 
-- Run all tests (workspace):
-  - `cargo test`
+- Run all tests (server crate):
+  - `cd crates/server && cargo test`
 
 - Run specific server tests:
-  - Unit tests only: `cargo test -p rura --lib`
-  - Integration tests only: `cargo test -p rura --test integration_tests`
-  - End-to-end messaging: `cargo test -p rura --test end_to_end_messaging`
-  - Messaging tests: `cargo test -p rura --test messaging_tests`
-  - AppState tests: `cargo test -p rura --test app_state_tests`
+  - Unit tests only: `cargo test --lib`
+  - Integration tests only: `cargo test --test integration_tests`
+  - End-to-end messaging: `cargo test --test end_to_end_messaging`
+  - Messaging tests: `cargo test --test messaging_tests`
+  - AppState tests: `cargo test --test app_state_tests`
 
 - Generate HTML coverage (Linux)
   - Install once: `cargo install cargo-tarpaulin`
@@ -103,7 +104,7 @@ See: [ARCHITECTURE.md](ARCHITECTURE.md) for a module-by-module map and flow.
   - GitHub Actions enforces a minimum of 80% coverage.
 
 ## Configuration
-- CLI: `--port <PORT>` (default 8080). See `crates/rura_server/src/models/args.rs`.
+- CLI: `--port <PORT>` (default 8080). See `crates/server/src/models/args.rs`.
 - TLS (required): `--tls-cert <PATH>` and `--tls-key <PATH>` (PEM; PKCS#8 or RSA key). The server refuses to start without them.
 
 ## Limitations
