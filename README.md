@@ -6,9 +6,9 @@ A small asynchronous TCP server written in Rust (Tokio) with:
 - Simple newline-delimited JSON protocol
 
 Quick links
-- Protocol: [PROTOCOL.md](PROTOCOL.md)
-- Architecture: [ARCHITECTURE.md](ARCHITECTURE.md)
-- Database & Auth: [DATABASE.md](DATABASE.md)
+- Protocol: [docs/PROTOCOL.md](docs/PROTOCOL.md)
+- Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- Database & Auth: [docs/DATABASE.md](docs/DATABASE.md)
 
 ## Quick Start
 
@@ -69,7 +69,7 @@ Full details: [PROTOCOL.md](PROTOCOL.md)
 - Shared models (re-exported from `rura_server`)
   - `rura_server::models::client_message::*` and `rura_server::messaging::models::*`
 
-See: [ARCHITECTURE.md](ARCHITECTURE.md) for a module-by-module map and flow.
+See: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for a module-by-module map and flow.
 
 ## Development
 - Format: `cargo fmt --all`
