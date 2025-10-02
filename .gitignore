@@ -3,3 +3,5 @@
 /bak
 
 *.db
+server.crt
+server.key
