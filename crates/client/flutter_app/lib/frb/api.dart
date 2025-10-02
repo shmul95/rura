@@ -9,9 +9,6 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 // These functions are ignored because they are not marked as `pub`: `build_root_store_from_pem`, `read_line`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `fmt`
 
-/// Minimal function to validate FRB wiring.
-Future<String> hello() => RustLib.instance.api.crateApiHello();
-
 /// Login to the TLS-only server and return the auth response.
 ///
 /// - `host`: e.g., "127.0.0.1" or "localhost"

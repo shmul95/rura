@@ -9,11 +9,6 @@ use std::io::{self, Read, Write};
 use std::net::TcpStream;
 use std::sync::{Arc, Once};
 
-/// Minimal function to validate FRB wiring.
-#[frb]
-pub fn hello() -> String {
-    "Hello from Rust".to_string()
-}
 
 /// Simple Dart-friendly login response.
 #[frb]

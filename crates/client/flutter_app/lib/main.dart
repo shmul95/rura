@@ -105,19 +105,6 @@ class _HomePageState extends State<HomePage> {
                   icon: const Icon(Icons.login),
                   label: Text(_isRegister ? 'Register' : 'Login'),
                 ),
-                const SizedBox(width: 12),
-                OutlinedButton.icon(
-                  onPressed: () async {
-                    try {
-                      final msg = await hello();
-                      setState(() => _status = 'hello(): $msg');
-                    } catch (e) {
-                      setState(() => _status = 'hello() failed: $e');
-                    }
-                  },
-                  icon: const Icon(Icons.handshake),
-                  label: const Text('Hello Test'),
-                ),
               ],
             ),
             const SizedBox(height: 16),
