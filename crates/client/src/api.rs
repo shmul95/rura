@@ -128,3 +128,70 @@ pub fn login_tls(
 
     Ok(LoginResponse { success: resp.success, message: resp.message, user_id: resp.user_id })
 }
+
+/// Register a new user against the TLS-only server and return the auth response.
+#[frb]
+pub fn register_tls(
+    host: String,
+    port: u16,
+    ca_pem: String,
+    passphrase: String,
+    password: String,
+) -> Result<LoginResponse, String> {
+    // Ensure a crypto provider is installed (rustls 0.23 requires this)
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
+
+    // Build TLS client config with provided root
+    let roots = build_root_store_from_pem(&ca_pem)?;
+    let config: ClientConfig = ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+
+    let server_name = ServerName::try_from(host.as_str())
+        .map_err(|e| format!("Invalid server name: {e}"))?
+        .to_owned();
+    let addr = format!("{}:{}", host, port);
+
+    // TCP connect
+    let tcp = TcpStream::connect(addr).map_err(|e| format!("TCP connect failed: {e}"))?;
+
+    // TLS handshake
+    let conn = ClientConnection::new(Arc::new(config), server_name)
+        .map_err(|e| format!("TLS connect failed: {e}"))?;
+    let mut tls = StreamOwned::new(conn, tcp);
+
+    // Read initial auth_required line (ignore failures)
+    let _ = read_line(&mut tls);
+
+    // Send register envelope
+    let register = AuthRequest { passphrase, password };
+    let envelope = ClientMessage {
+        command: "register".to_string(),
+        data: serde_json::to_string(&register).map_err(|e| format!("Serialize error: {e}"))?,
+    };
+    let mut line = serde_json::to_string(&envelope)
+        .map_err(|e| format!("Serialize error: {e}"))?;
+    line.push('\n');
+    tls.write_all(line.as_bytes())
+        .map_err(|e| format!("Write failed: {e}"))?;
+    tls.flush().map_err(|e| format!("Flush failed: {e}"))?;
+
+    // Read auth_response
+    let raw = read_line(&mut tls).map_err(|e| format!("Read failed: {e}"))?;
+    let wrapper: ClientMessage = serde_json::from_str(&raw)
+        .map_err(|e| format!("Invalid JSON from server: {e}; raw={raw}"))?;
+    if wrapper.command != "auth_response" {
+        return Err(format!("Unexpected command: {}", wrapper.command));
+    }
+    let resp: AuthResponse = serde_json::from_str(&wrapper.data)
+        .map_err(|e| format!("Invalid auth_response data: {e}"))?;
+
+    // Graceful TLS close
+    tls.conn.send_close_notify();
+    let _ = tls.flush();
+
+    Ok(LoginResponse { success: resp.success, message: resp.message, user_id: resp.user_id })
+}

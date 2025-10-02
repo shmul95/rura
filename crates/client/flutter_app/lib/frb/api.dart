@@ -32,6 +32,21 @@ Future<LoginResponse> loginTls({
   password: password,
 );
 
+/// Register a new user against the TLS-only server and return the auth response.
+Future<LoginResponse> registerTls({
+  required String host,
+  required int port,
+  required String caPem,
+  required String passphrase,
+  required String password,
+}) => RustLib.instance.api.crateApiRegisterTls(
+  host: host,
+  port: port,
+  caPem: caPem,
+  passphrase: passphrase,
+  password: password,
+);
+
 /// Simple Dart-friendly login response.
 class LoginResponse {
   final bool success;

@@ -64,7 +64,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => 622849887;
+  int get rustContentHash => -1333239649;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -78,6 +78,14 @@ abstract class RustLibApi extends BaseApi {
   Future<String> crateApiHello();
 
   Future<LoginResponse> crateApiLoginTls({
+    required String host,
+    required int port,
+    required String caPem,
+    required String passphrase,
+    required String password,
+  });
+
+  Future<LoginResponse> crateApiRegisterTls({
     required String host,
     required int port,
     required String caPem,
@@ -158,6 +166,46 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateApiLoginTlsConstMeta => const TaskConstMeta(
     debugName: "login_tls",
+    argNames: ["host", "port", "caPem", "passphrase", "password"],
+  );
+
+  @override
+  Future<LoginResponse> crateApiRegisterTls({
+    required String host,
+    required int port,
+    required String caPem,
+    required String passphrase,
+    required String password,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(host, serializer);
+          sse_encode_u_16(port, serializer);
+          sse_encode_String(caPem, serializer);
+          sse_encode_String(passphrase, serializer);
+          sse_encode_String(password, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 3,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_login_response,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiRegisterTlsConstMeta,
+        argValues: [host, port, caPem, passphrase, password],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiRegisterTlsConstMeta => const TaskConstMeta(
+    debugName: "register_tls",
     argNames: ["host", "port", "caPem", "passphrase", "password"],
   );
 
