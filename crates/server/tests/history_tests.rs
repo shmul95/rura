@@ -40,7 +40,7 @@ async fn history_returns_persisted_messages_for_user() {
     let state = Arc::new(AppState::default());
 
     // Use a duplex stream to run the full client handler
-    let (mut server_stream, mut client_stream) = tokio::io::duplex(4096);
+    let (server_stream, mut client_stream) = tokio::io::duplex(4096);
     let client_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 12345);
     let h = tokio::spawn(rura_server::client::handle_client(
         server_stream,
