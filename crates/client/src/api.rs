@@ -201,3 +201,43 @@ pub fn register_tls(
         user_id: resp.user_id,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn build_root_store_from_valid_pem() {
+        // Generate a minimal self-signed CA cert via rcgen and ensure parsing succeeds
+        let mut params = rcgen::CertificateParams::default();
+        params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        params
+            .distinguished_name
+            .push(rcgen::DnType::CommonName, "Test CA");
+        let ca = rcgen::Certificate::from_params(params).expect("rcgen ca");
+        let ca_pem = ca.serialize_pem().expect("pem");
+        let roots = build_root_store_from_pem(&ca_pem).expect("root store");
+        assert!(!roots.is_empty());
+    }
+
+    #[test]
+    fn build_root_store_from_empty_pem_fails() {
+        let res = build_root_store_from_pem("");
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn read_line_reads_until_newline() {
+        let mut c = Cursor::new(b"hello world\nrest ignored".as_slice());
+        let line = read_line(&mut c).expect("read_line");
+        assert_eq!(line, "hello world");
+    }
+
+    #[test]
+    fn read_line_reads_all_without_newline() {
+        let mut c = Cursor::new(b"no newline here".as_slice());
+        let line = read_line(&mut c).expect("read_line");
+        assert_eq!(line, "no newline here");
+    }
+}
