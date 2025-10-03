@@ -49,7 +49,7 @@ Flutter client (desktop)
   - Default CA path in the UI: `../../../certs/ca.crt` (relative to the Flutter app folder).
   - Enter passphrase/password; tap Login or Register.
   - Chats list groups conversations by peer user id; tap to open a chat and send messages.
-  - Note: live incoming messages require a persistent connection and are not yet enabled; use history refresh in future iterations.
+  - Live incoming messages: the app opens a persistent TLS session via `openMessageStreamTls` and updates chats in real time. For one-off flows without a stream, use history fetch APIs.
 
 Login instead of register (if users already exist)
 - `{"command":"login","data":"{\"passphrase\":\"alice\",\"password\":\"secret\"}"}`
