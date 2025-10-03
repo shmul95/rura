@@ -18,6 +18,7 @@ Client quick start
   - You can change Host/Port/Cert path, passphrase, and password in the UI.
   - After login/register, you land on a Chats list and can open a chat to send messages.
   - Live updates: the client opens a persistent TLS stream and updates chats in real time when new messages arrive.
+  - Sending uses the same persistent session (no re-login) via `sendDirectMessageOverStream`, keeping the server’s online routing in sync.
 
 ## Quick Start
 

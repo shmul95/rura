@@ -1020,6 +1020,7 @@ name = "rura_client"
 version = "0.1.0"
 dependencies = [
  "flutter_rust_bridge",
+ "once_cell",
  "rcgen",
  "rura_models",
  "rura_server",

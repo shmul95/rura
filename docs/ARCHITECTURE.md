@@ -15,6 +15,7 @@ This document describes the workspace layout, key crates, and request flow after
     - `login_and_fetch_history_tls`, `register_and_fetch_history_tls`
     - `send_direct_message_tls` (login + send in one TLS session)
     - `open_message_stream_tls` (login and keep a TLS session open; emits incoming `message` events)
+    - `send_direct_message_over_stream` (send using the existing persistent session; avoids overwriting the server’s online registration)
   - Defines a Dart-friendly `HistoryMessage` struct for history results.
 
 ## Workspace Diagram
@@ -55,8 +56,8 @@ Docs: [PROTOCOL.md](PROTOCOL.md) and [DATABASE.md](DATABASE.md) remain valid and
   - Chat view with bubble UI and a composer to send messages
 - Current client behavior:
   - Fetches message history after auth and groups it locally
-  - Sends direct messages via `send_direct_message_tls` (optimistic UI append)
-  - Live inbound messaging: `open_message_stream_tls` runs after auth and pushes new messages to the UI in real time
+  - Opens a persistent session via `open_message_stream_tls` and pushes new messages to the UI in real time
+  - Sends direct messages via `send_direct_message_over_stream` (optimistic UI append), reusing the same session
 
 ## Server (crate `rura_server`)
 - Entry: `crates/server/src/main.rs`

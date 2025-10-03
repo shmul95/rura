@@ -85,3 +85,16 @@ final sub = stream.listen((json) {
 });
 // Remember to cancel sub when no longer needed
 ```
+
+Sending using the persistent session
+- To keep the server’s online routing stable, send over the same persistent session instead of re-logging in.
+- Call `sendDirectMessageOverStream(userId, toUserId, body, saved?)` where `userId` is the authenticated user id obtained from login/history:
+
+```dart
+await sendDirectMessageOverStream(
+  userId: bundle.userId!,
+  toUserId: 2,
+  body: 'hello',
+  saved: false,
+);
+```
