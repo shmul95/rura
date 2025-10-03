@@ -7,9 +7,11 @@ use tokio::net::TcpListener;
 // Reuse the actual server acceptor and handlers
 use rura_server::client::handle_client;
 use rura_server::messaging::state::AppState;
+use rura_server::utils::db_utils::store_message;
 use rura_server::utils::tls::make_tls_acceptor;
 
 // The client functions under test
+use rura_client::api::login_and_fetch_history_tls;
 use rura_client::api::{login_tls, register_tls};
 
 fn create_test_db() -> Arc<Mutex<Connection>> {
@@ -128,7 +130,7 @@ async fn tls_register_then_login_end_to_end() {
     let db = create_test_db();
     let state = Arc::new(AppState::default());
     let port = accept_n_connections(
-        2,
+        3,
         Arc::clone(&db),
         Arc::clone(&state),
         cert_file.path().to_str().unwrap(),
@@ -182,4 +184,34 @@ async fn tls_register_then_login_end_to_end() {
     .expect("login ok");
     assert!(login.success, "login should succeed: {}", login.message);
     assert_eq!(login.user_id, Some(uid));
+
+    // Persist a message for this user (from self to self) so history returns something
+    let _mid = store_message(Arc::clone(&db), uid, uid, "hello history", false)
+        .await
+        .expect("store message");
+
+    // Login + fetch history in one go
+    let ca_for_hist = std::fs::read_to_string(cert_file.path()).expect("read chain");
+    // Extract CA cert block (last cert in chain)
+    let ca_pem_hist = ca_for_hist
+        .split("-----BEGIN CERTIFICATE-----")
+        .filter(|s| !s.trim().is_empty())
+        .map(|body| format!("-----BEGIN CERTIFICATE-----{}", body))
+        .last()
+        .unwrap();
+    let hist = tokio::task::spawn_blocking(move || {
+        login_and_fetch_history_tls(
+            "localhost".to_string(),
+            port,
+            ca_pem_hist,
+            "alice".to_string(),
+            "secret".to_string(),
+            Some(50),
+        )
+    })
+    .await
+    .expect("spawn")
+    .expect("hist ok");
+    assert!(hist.success);
+    assert!(hist.messages.iter().any(|m| m.body == "hello history"));
 }

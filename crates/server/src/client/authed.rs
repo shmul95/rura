@@ -4,11 +4,46 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
 use crate::messaging::handlers::send_direct;
-use crate::messaging::models::{DirectMessageReq, SaveRequest, SaveResponse};
 use crate::messaging::state::AppState;
 use crate::models::client_message::ClientMessage;
-use crate::utils::db_utils::set_message_saved;
+use crate::utils::db_utils::{fetch_messages_for_user, set_message_saved};
 use rusqlite::Connection;
+
+#[derive(serde::Deserialize)]
+struct LocalHistoryRequest {
+    limit: Option<usize>,
+}
+
+#[derive(serde::Serialize)]
+struct LocalHistoryMessage {
+    id: i64,
+    from_user_id: i64,
+    to_user_id: i64,
+    body: String,
+    timestamp: String,
+    saved: bool,
+}
+
+#[derive(serde::Serialize)]
+struct LocalHistoryResponse {
+    success: bool,
+    message: String,
+    messages: Vec<LocalHistoryMessage>,
+}
+
+#[derive(serde::Deserialize)]
+struct LocalSaveRequest {
+    message_id: i64,
+    saved: Option<bool>,
+}
+
+#[derive(serde::Serialize)]
+struct LocalSaveResponse {
+    success: bool,
+    message: String,
+    message_id: Option<i64>,
+    saved: Option<bool>,
+}
 
 pub(super) async fn handle_client_message(
     state: Arc<AppState>,
@@ -27,9 +62,20 @@ pub(super) async fn handle_client_message(
             );
             match msg.command.as_str() {
                 "message" => {
-                    match serde_json::from_str::<DirectMessageReq>(&msg.data) {
+                    #[derive(serde::Deserialize)]
+                    struct LocalDM {
+                        to_user_id: i64,
+                        body: String,
+                        saved: Option<bool>,
+                    }
+                    match serde_json::from_str::<LocalDM>(&msg.data) {
                         Ok(req) => {
-                            send_direct(Arc::clone(&state), Arc::clone(&conn), user_id, req)
+                            let req2 = crate::messaging::models::DirectMessageReq {
+                                to_user_id: req.to_user_id,
+                                body: req.body,
+                                saved: req.saved,
+                            };
+                            send_direct(Arc::clone(&state), Arc::clone(&conn), user_id, req2)
                                 .await?;
                         }
                         Err(_) => {
@@ -42,7 +88,56 @@ pub(super) async fn handle_client_message(
                         }
                     }
                 }
-                "save" => match serde_json::from_str::<SaveRequest>(&msg.data) {
+                "history" => match serde_json::from_str::<LocalHistoryRequest>(&msg.data) {
+                    Ok(req) => {
+                        let limit = req.limit.unwrap_or(100);
+                        match fetch_messages_for_user(Arc::clone(&conn), user_id, limit).await {
+                            Ok(messages) => {
+                                let mapped: Vec<LocalHistoryMessage> = messages
+                                    .into_iter()
+                                    .map(|m| LocalHistoryMessage {
+                                        id: m.id,
+                                        from_user_id: m.sender,
+                                        to_user_id: m.receiver,
+                                        body: m.content,
+                                        timestamp: m.timestamp,
+                                        saved: m.saved,
+                                    })
+                                    .collect();
+                                let resp = LocalHistoryResponse {
+                                    success: true,
+                                    message: "OK".to_string(),
+                                    messages: mapped,
+                                };
+                                let wrapper = ClientMessage {
+                                    command: "history_response".to_string(),
+                                    data: serde_json::to_string(&resp).unwrap(),
+                                };
+                                let _ = outbound.send(wrapper);
+                            }
+                            Err(_) => {
+                                let resp = LocalHistoryResponse {
+                                    success: false,
+                                    message: "Failed to load history".to_string(),
+                                    messages: Vec::new(),
+                                };
+                                let wrapper = ClientMessage {
+                                    command: "history_response".to_string(),
+                                    data: serde_json::to_string(&resp).unwrap(),
+                                };
+                                let _ = outbound.send(wrapper);
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        let err = ClientMessage {
+                            command: "error".to_string(),
+                            data: "Invalid history format".to_string(),
+                        };
+                        let _ = outbound.send(err);
+                    }
+                },
+                "save" => match serde_json::from_str::<LocalSaveRequest>(&msg.data) {
                     Ok(req) => {
                         let saved_flag = req.saved.unwrap_or(true);
                         match set_message_saved(
@@ -54,7 +149,7 @@ pub(super) async fn handle_client_message(
                         .await
                         {
                             Ok(true) => {
-                                let resp = SaveResponse {
+                                let resp = LocalSaveResponse {
                                     success: true,
                                     message: "Message updated".to_string(),
                                     message_id: Some(req.message_id),
@@ -67,7 +162,7 @@ pub(super) async fn handle_client_message(
                                 let _ = outbound.send(wrapper);
                             }
                             Ok(false) => {
-                                let resp = SaveResponse {
+                                let resp = LocalSaveResponse {
                                     success: false,
                                     message: "Message not found or not authorized".to_string(),
                                     message_id: Some(req.message_id),
@@ -80,7 +175,7 @@ pub(super) async fn handle_client_message(
                                 let _ = outbound.send(wrapper);
                             }
                             Err(_) => {
-                                let resp = SaveResponse {
+                                let resp = LocalSaveResponse {
                                     success: false,
                                     message: "Failed to update message".to_string(),
                                     message_id: Some(req.message_id),

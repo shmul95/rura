@@ -27,6 +27,11 @@ fi
 echo "[run_client] Running FRB codegen"
 "$ROOT_DIR/scripts/frb_codegen.sh" "$APP_DIR" "$ROOT_DIR"
 
+echo "[run_client] Formatting Rust workspace (cargo fmt --all)"
+pushd "$ROOT_DIR" >/dev/null
+cargo fmt --all
+popd >/dev/null
+
 echo "[run_client] Building Rust client (release) into crates/client/target"
 export CARGO_TARGET_DIR="$ROOT_DIR/crates/client/target"
 pushd "$ROOT_DIR/crates/client" >/dev/null
@@ -51,4 +56,3 @@ pushd "$APP_DIR" >/dev/null
 flutter pub get
 flutter run -d "$DEVICE"
 popd >/dev/null
-

@@ -8,4 +8,5 @@ pub mod bridge_generated;
 pub use bridge_generated::*;
 
 // Re-export models used in FRB signatures so they are in-crate for codegen.
+pub use crate::api::{HistoryRequest, HistoryResponse};
 pub use rura_models::client_message::{AuthRequest, AuthResponse, ClientMessage};

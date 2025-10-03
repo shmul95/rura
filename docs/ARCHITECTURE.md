@@ -9,7 +9,14 @@ This document describes the workspace layout, key crates, and request flow after
 - `crates/models` (crate name: `rura_models`)
   - Shared protocol DTOs used by both server and future clients (e.g., Flutter via FRB).
 - `crates/client` (crate name: `rura_client`)
-  - Placeholder for a Rust client SDK (to be bridged with Flutter via flutter_rust_bridge).
+  - Rust client SDK bridged to Flutter using flutter_rust_bridge (FRB).
+  - Exposes TLS helpers and high-level APIs consumable from Dart:
+    - `login_tls`, `register_tls`
+    - `login_and_fetch_history_tls`, `register_and_fetch_history_tls`
+    - `send_direct_message_tls` (login + send in one TLS session)
+    - `open_message_stream_tls` (login and keep a TLS session open; emits incoming `message` events)
+    - `send_direct_message_over_stream` (send using the existing persistent session; avoids overwriting the server’s online registration)
+  - Defines a Dart-friendly `HistoryMessage` struct for history results.
 
 ## Workspace Diagram
 
@@ -38,6 +45,19 @@ Legend
 - Runtime connection: rura_client connects to rura_server over TLS using the wire protocol.
 
 Docs: [PROTOCOL.md](PROTOCOL.md) and [DATABASE.md](DATABASE.md) remain valid and describe wire format and persistence. The server is TLS-only.
+
+## Client (crate `rura_client` + Flutter)
+- FRB entrypoint lives in `crates/client/src/api.rs`; functions are annotated with `#[frb]` and codegen produces:
+  - Rust glue: `crates/client/src/bridge_generated.rs`
+  - Dart bindings: `crates/client/flutter_app/lib/frb/*`
+- The default Flutter app (desktop) provides:
+  - Login/Register form (host/port/CA/passphrase/password)
+  - Chats list view (WhatsApp-like) grouping history by peer user id
+  - Chat view with bubble UI and a composer to send messages
+- Current client behavior:
+  - Fetches message history after auth and groups it locally
+  - Opens a persistent session via `open_message_stream_tls` and pushes new messages to the UI in real time
+  - Sends direct messages via `send_direct_message_over_stream` (optimistic UI append), reusing the same session
 
 ## Server (crate `rura_server`)
 - Entry: `crates/server/src/main.rs`

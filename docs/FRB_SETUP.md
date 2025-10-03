@@ -49,14 +49,52 @@ This repo exposes a client crate (`crates/client`) to bridge Rust to Flutter usi
     final resp = await loginTls(
       host: 'localhost',
       port: 8443,
-      caPem: await File('server.crt').readAsString(),
+      // Use a CA certificate that signed the server cert (dev: certs/ca.crt)
+      caPem: await File('certs/ca.crt').readAsString(),
       passphrase: 'alice',
       password: 'secret',
     );
     print('success=${resp.success} userId=${resp.userId} message=${resp.message}');
     ```
 
+Extra
+- The helper script `./scripts/run_client.sh` wires up codegen and builds the Rust library into `crates/client/target/release` so the generated loader can find it at runtime.
+
 Notes
 - FRB will regenerate `crates/client/src/bridge_generated.rs` and `lib/bridge_generated.dart` on each codegen run.
 - For packaging, consider copying the built `.so/.dylib/.dll` next to your Flutter app binary or customizing the loader.
 - To add real features, extend `crates/client/src/api.rs` with `#[frb]` functions (e.g., `register_tls`, messaging) and re-run codegen.
+
+## 5) Streaming from Rust (live messages)
+
+- FRB supports a `StreamSink<T>` parameter; in Rust you can keep a TLS session open and push events to Dart.
+- This repo exposes `open_message_stream_tls(host, port, ca_pem, passphrase, password) -> Stream<String>` which yields the JSON payload of inbound `message` events.
+
+Dart example:
+```dart
+final stream = openMessageStreamTls(
+  host: 'localhost',
+  port: 8443,
+  caPem: await File('certs/ca.crt').readAsString(),
+  passphrase: 'alice',
+  password: 'secret',
+);
+final sub = stream.listen((json) {
+  final m = jsonDecode(json) as Map;
+  print('from ${m['from_user_id']}: ${m['body']}');
+});
+// Remember to cancel sub when no longer needed
+```
+
+Sending using the persistent session
+- To keep the server’s online routing stable, send over the same persistent session instead of re-logging in.
+- Call `sendDirectMessageOverStream(userId, toUserId, body, saved?)` where `userId` is the authenticated user id obtained from login/history:
+
+```dart
+await sendDirectMessageOverStream(
+  userId: bundle.userId!,
+  toUserId: 2,
+  body: 'hello',
+  saved: false,
+);
+```

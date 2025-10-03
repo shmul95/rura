@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:io';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'frb/api.dart';
 import 'frb/frb_generated.dart';
@@ -28,50 +30,83 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
+class SessionConfig {
+  final String host;
+  final int port;
+  final String caPem;
+  final String passphrase;
+  final String password;
+  const SessionConfig({
+    required this.host,
+    required this.port,
+    required this.caPem,
+    required this.passphrase,
+    required this.password,
+  });
+}
+
 class _HomePageState extends State<HomePage> {
   final _host = TextEditingController(text: 'localhost');
   final _port = TextEditingController(text: '8443');
-  // Default to the local CA certificate used to sign the server leaf
   final _certPath = TextEditingController(text: '../../../certs/ca.crt');
   final _passphrase = TextEditingController(text: 'alice');
   final _password = TextEditingController(text: 'secret');
   String _status = 'Ready';
-  bool _isRegister = false;
 
-  Future<void> _login() async {
-    setState(() => _status = 'Logging in...');
+  Future<void> _authAndShowHistory({required bool register}) async {
+    setState(() => _status = register ? 'Registering...' : 'Logging in...');
     try {
       final host = _host.text.trim();
       final port = int.tryParse(_port.text.trim()) ?? 8443;
       final caPem = await File(_certPath.text.trim()).readAsString();
       final pass = _passphrase.text;
       final pwd = _password.text;
-      final resp = _isRegister
-          ? await registerTls(
+
+      final bundle = register
+          ? await registerAndFetchHistoryTls(
               host: host,
               port: port,
               caPem: caPem,
               passphrase: pass,
               password: pwd,
+              limit: BigInt.from(200),
             )
-          : await loginTls(
+          : await loginAndFetchHistoryTls(
               host: host,
               port: port,
               caPem: caPem,
               passphrase: pass,
               password: pwd,
+              limit: BigInt.from(200),
             );
-      setState(() => _status =
-          'success=${resp.success} user_id=${resp.userId ?? 'null'} msg=${resp.message}');
+
+      if (!bundle.success) {
+        setState(() => _status = bundle.message);
+        return;
+      }
+
+      if (!mounted) return;
+      final session = SessionConfig(
+        host: host,
+        port: port,
+        caPem: caPem,
+        passphrase: pass,
+        password: pwd,
+      );
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => ChatListPage(bundle: bundle, session: session),
+        ),
+      );
     } catch (e) {
-      setState(() => _status = 'Login failed: $e');
+      setState(() => _status = '${register ? 'Register' : 'Login'} failed: $e');
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Rura Client Login')),
+      appBar: AppBar(title: const Text('Rura Client')),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -83,27 +118,19 @@ class _HomePageState extends State<HomePage> {
             const SizedBox(height: 12),
             TextField(controller: _passphrase, decoration: const InputDecoration(labelText: 'Passphrase')),
             TextField(controller: _password, decoration: const InputDecoration(labelText: 'Password'), obscureText: true),
-            const SizedBox(height: 12),
-            Row(children: [
-              ChoiceChip(
-                label: const Text('Login'),
-                selected: !_isRegister,
-                onSelected: (_) => setState(() => _isRegister = false),
-              ),
-              const SizedBox(width: 8),
-              ChoiceChip(
-                label: const Text('Register'),
-                selected: _isRegister,
-                onSelected: (_) => setState(() => _isRegister = true),
-              ),
-            ]),
             const SizedBox(height: 16),
             Row(
               children: [
                 ElevatedButton.icon(
-                  onPressed: _login,
+                  onPressed: () => _authAndShowHistory(register: false),
                   icon: const Icon(Icons.login),
-                  label: Text(_isRegister ? 'Register' : 'Login'),
+                  label: const Text('Login'),
+                ),
+                const SizedBox(width: 12),
+                OutlinedButton.icon(
+                  onPressed: () => _authAndShowHistory(register: true),
+                  icon: const Icon(Icons.app_registration),
+                  label: const Text('Register'),
                 ),
               ],
             ),
@@ -114,4 +141,331 @@ class _HomePageState extends State<HomePage> {
       ),
     );
   }
+}
+
+class ChatListPage extends StatelessWidget {
+  final HistoryBundle bundle;
+  final SessionConfig session;
+  const ChatListPage({super.key, required this.bundle, required this.session});
+
+  @override
+  Widget build(BuildContext context) => _ChatListScaffold(bundle: bundle, session: session);
+
+  static Future<int?> _promptForUserId(BuildContext context) async {
+    final ctrl = TextEditingController();
+    return showDialog<int>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('New chat'),
+        content: TextField(
+          controller: ctrl,
+          keyboardType: TextInputType.number,
+          decoration: const InputDecoration(labelText: 'User id'),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () {
+              final v = int.tryParse(ctrl.text.trim());
+              Navigator.pop(ctx, v);
+            },
+            child: const Text('Start'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ChatListScaffold extends StatefulWidget {
+  final HistoryBundle bundle;
+  final SessionConfig session;
+  const _ChatListScaffold({required this.bundle, required this.session});
+  @override
+  State<_ChatListScaffold> createState() => _ChatListScaffoldState();
+}
+
+class _ChatListScaffoldState extends State<_ChatListScaffold> {
+  late final int _selfId;
+  late final Map<int, List<HistoryMessage>> _groups;
+  StreamSubscription<String>? _sub;
+  final _incoming = StreamController<HistoryMessage>.broadcast();
+
+  @override
+  void initState() {
+    super.initState();
+    _selfId = widget.bundle.userId ?? 0;
+    _groups = <int, List<HistoryMessage>>{};
+    for (final m in widget.bundle.messages) {
+      final peer = m.fromUserId == _selfId ? m.toUserId : m.fromUserId;
+      _groups.putIfAbsent(peer, () => []).add(m);
+    }
+    _startStream();
+  }
+
+  void _startStream() {
+    final s = widget.session;
+    final stream = openMessageStreamTls(
+      host: s.host,
+      port: s.port,
+      caPem: s.caPem,
+      passphrase: s.passphrase,
+      password: s.password,
+    );
+    _sub = stream.listen((data) {
+      try {
+        final map = jsonDecode(data) as Map;
+        final from = map['from_user_id'] as int;
+        final body = map['body'] as String;
+        final msg = HistoryMessage(
+          id: 0,
+          fromUserId: from,
+          toUserId: _selfId,
+          body: body,
+          timestamp: DateTime.now().toIso8601String(),
+          saved: false,
+        );
+        _incoming.add(msg);
+        final peer = from;
+        setState(() {
+          _groups.putIfAbsent(peer, () => []);
+          _groups[peer]!.add(msg);
+        });
+      } catch (_) {
+        // ignore malformed event
+      }
+    }, onError: (_) {});
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    _incoming.close();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final items = _groups.entries.toList()
+      ..sort((a, b) {
+        final at = DateTime.tryParse(a.value.last.timestamp) ?? DateTime(0);
+        final bt = DateTime.tryParse(b.value.last.timestamp) ?? DateTime(0);
+        return bt.compareTo(at);
+      });
+    return Scaffold(
+      appBar: AppBar(title: const Text('Chats')),
+      body: ListView.separated(
+        itemCount: items.length,
+        separatorBuilder: (_, __) => const Divider(height: 1),
+        itemBuilder: (context, index) {
+          final peerId = items[index].key;
+          final msgs = items[index].value;
+          final last = msgs.last;
+          return ListTile(
+            leading: CircleAvatar(child: Text('${peerId % 100}')),
+            title: Text('User $peerId'),
+            subtitle: Text(last.body, maxLines: 1, overflow: TextOverflow.ellipsis),
+            trailing: Text(_formatTime(last.timestamp), style: Theme.of(context).textTheme.bodySmall),
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => ChatPage(
+                    session: widget.session,
+                    selfUserId: _selfId,
+                    peerUserId: peerId,
+                    initial: msgs,
+                    inbound: _incoming.stream,
+                  ),
+                ),
+              );
+            },
+          );
+        },
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () async {
+          final peer = await ChatListPage._promptForUserId(context);
+          if (peer == null) return;
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => ChatPage(
+                session: widget.session,
+                selfUserId: _selfId,
+                peerUserId: peer,
+                initial: const [],
+                inbound: _incoming.stream,
+              ),
+            ),
+          );
+        },
+        child: const Icon(Icons.chat),
+      ),
+    );
+  }
+}
+
+class ChatPage extends StatefulWidget {
+  final SessionConfig session;
+  final int selfUserId;
+  final int peerUserId;
+  final List<HistoryMessage> initial;
+  final Stream<HistoryMessage>? inbound;
+  const ChatPage({super.key, required this.session, required this.selfUserId, required this.peerUserId, required this.initial, this.inbound});
+
+  @override
+  State<ChatPage> createState() => _ChatPageState();
+}
+
+class _ChatPageState extends State<ChatPage> {
+  final _input = TextEditingController();
+  final _scroll = ScrollController();
+  bool _sending = false;
+  late List<HistoryMessage> _messages;
+  StreamSubscription<HistoryMessage>? _inSub;
+
+  @override
+  void initState() {
+    super.initState();
+    _messages = List.of(widget.initial);
+    _inSub = widget.inbound?.listen((m) {
+      if (m.fromUserId == widget.peerUserId) {
+        setState(() => _messages.add(m));
+        if (_scroll.hasClients) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (_scroll.hasClients) {
+              _scroll.jumpTo(_scroll.position.maxScrollExtent + 80);
+            }
+          });
+        }
+      }
+    });
+  }
+
+  Future<void> _send() async {
+    final text = _input.text.trim();
+    if (text.isEmpty) return;
+    setState(() => _sending = true);
+    try {
+      await sendDirectMessageOverStream(
+        userId: widget.selfUserId,
+        toUserId: widget.peerUserId,
+        body: text,
+        saved: false,
+      );
+      final now = DateTime.now().toIso8601String();
+      setState(() {
+        _messages.add(HistoryMessage(
+          id: 0,
+          fromUserId: widget.selfUserId,
+          toUserId: widget.peerUserId,
+          body: text,
+          timestamp: now,
+          saved: false,
+        ));
+        _input.clear();
+      });
+      await Future.delayed(const Duration(milliseconds: 50));
+      if (_scroll.hasClients) {
+        _scroll.jumpTo(_scroll.position.maxScrollExtent + 80);
+      }
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  @override
+  void dispose() {
+    _inSub?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final self = widget.selfUserId;
+    final msgs = _messages.where((m) => m.fromUserId == widget.peerUserId || m.toUserId == widget.peerUserId).toList();
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('User ${widget.peerUserId}'),
+      ),
+      body: Column(
+        children: [
+          Expanded(
+            child: ListView.builder(
+              controller: _scroll,
+              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+              itemCount: msgs.length,
+              itemBuilder: (context, index) {
+                final m = msgs[index];
+                final fromSelf = m.fromUserId == self;
+                return Align(
+                  alignment: fromSelf ? Alignment.centerRight : Alignment.centerLeft,
+                  child: Container(
+                    margin: const EdgeInsets.symmetric(vertical: 4),
+                    padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                    constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.7),
+                    decoration: BoxDecoration(
+                      color: fromSelf ? Colors.blue.shade200 : Colors.grey.shade300,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: fromSelf ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                      children: [
+                        Text(m.body),
+                        const SizedBox(height: 4),
+                        Text(
+                          _formatTime(m.timestamp),
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.all(8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _input,
+                      decoration: const InputDecoration(
+                        hintText: 'Type a message',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    onPressed: _sending ? null : _send,
+                    icon: _sending
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.send),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+String _two(int x) => x.toString().padLeft(2, '0');
+String _formatTime(String iso) {
+  final dt = DateTime.tryParse(iso);
+  if (dt == null) return '';
+  final now = DateTime.now();
+  if (dt.year == now.year && dt.month == now.month && dt.day == now.day) {
+    return '${_two(dt.hour)}:${_two(dt.minute)}';
+  }
+  return '${dt.year}-${_two(dt.month)}-${_two(dt.day)}';
 }

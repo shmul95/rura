@@ -21,7 +21,7 @@ pushd "$APP_DIR" >/dev/null
 echo "Adding flutter_rust_bridge + ffi to Flutter app"
 flutter pub add flutter_rust_bridge ffi
 
-echo "Writing login-capable main.dart"
+echo "Writing login + history navigation main.dart"
 cat > lib/main.dart <<'DART'
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -61,32 +61,53 @@ class _HomePageState extends State<HomePage> {
   final _password = TextEditingController(text: 'secret');
   String _status = 'Ready';
 
-  Future<void> _login() async {
-    setState(() => _status = 'Logging in...');
+  Future<void> _authAndShowHistory({required bool register}) async {
+    setState(() => _status = register ? 'Registering...' : 'Logging in...');
     try {
       final host = _host.text.trim();
       final port = int.tryParse(_port.text.trim()) ?? 8443;
       final caPem = await File(_certPath.text.trim()).readAsString();
       final pass = _passphrase.text;
       final pwd = _password.text;
-      final resp = await loginTls(
-        host: host,
-        port: port,
-        caPem: caPem,
-        passphrase: pass,
-        password: pwd,
+
+      final bundle = register
+          ? await registerAndFetchHistoryTls(
+              host: host,
+              port: port,
+              caPem: caPem,
+              passphrase: pass,
+              password: pwd,
+              limit: 200,
+            )
+          : await loginAndFetchHistoryTls(
+              host: host,
+              port: port,
+              caPem: caPem,
+              passphrase: pass,
+              password: pwd,
+              limit: 200,
+            );
+
+      if (!bundle.success) {
+        setState(() => _status = bundle.message);
+        return;
+      }
+
+      if (!mounted) return;
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => HistoryPage(bundle: bundle),
+        ),
       );
-      setState(() => _status =
-          'success=${resp.success} user_id=${resp.userId ?? 'null'} msg=${resp.message}');
     } catch (e) {
-      setState(() => _status = 'Login failed: $e');
+      setState(() => _status = '${register ? 'Register' : 'Login'} failed: $e');
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Rura Client Login')),
+      appBar: AppBar(title: const Text('Rura Client')),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -102,22 +123,15 @@ class _HomePageState extends State<HomePage> {
             Row(
               children: [
                 ElevatedButton.icon(
-                  onPressed: _login,
+                  onPressed: () => _authAndShowHistory(register: false),
                   icon: const Icon(Icons.login),
                   label: const Text('Login'),
                 ),
                 const SizedBox(width: 12),
                 OutlinedButton.icon(
-                  onPressed: () async {
-                    try {
-                      final msg = await hello();
-                      setState(() => _status = 'hello(): $msg');
-                    } catch (e) {
-                      setState(() => _status = 'hello() failed: $e');
-                    }
-                  },
-                  icon: const Icon(Icons.handshake),
-                  label: const Text('Hello Test'),
+                  onPressed: () => _authAndShowHistory(register: true),
+                  icon: const Icon(Icons.app_registration),
+                  label: const Text('Register'),
                 ),
               ],
             ),
@@ -125,6 +139,31 @@ class _HomePageState extends State<HomePage> {
             Text(_status),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class HistoryPage extends StatelessWidget {
+  final HistoryBundle bundle;
+  const HistoryPage({super.key, required this.bundle});
+
+  @override
+  Widget build(BuildContext context) {
+    final msgs = bundle.messages;
+    return Scaffold(
+      appBar: AppBar(title: Text('History (total: ${msgs.length})')),
+      body: ListView.separated(
+        itemCount: msgs.length,
+        separatorBuilder: (_, __) => const Divider(height: 1),
+        itemBuilder: (context, index) {
+          final m = msgs[index];
+          return ListTile(
+            title: Text(m.body),
+            subtitle: Text('from ${m.fromUserId} → ${m.toUserId} • ${m.timestamp}'),
+            trailing: m.saved == true ? const Icon(Icons.bookmark, size: 18) : null,
+          );
+        },
       ),
     );
   }
