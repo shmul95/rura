@@ -1,4 +1,4 @@
-use crate::messaging::models::HistoryMessage;
+// Use fully qualified path to shared model to avoid module import issues
 use argon2::Argon2;
 use argon2::password_hash::{
     Error as PasswordHashError, PasswordHash, PasswordHasher, PasswordVerifier, SaltString,
@@ -193,11 +193,21 @@ pub async fn set_message_saved(
     Ok(updated == 1)
 }
 
+#[derive(Debug, Clone)]
+pub struct RawMessageRow {
+    pub id: i64,
+    pub sender: i64,
+    pub receiver: i64,
+    pub content: String,
+    pub timestamp: String,
+    pub saved: bool,
+}
+
 pub async fn fetch_messages_for_user(
     conn: Arc<Mutex<Connection>>,
     user_id: i64,
     limit: usize,
-) -> SqliteResult<Vec<HistoryMessage>> {
+) -> SqliteResult<Vec<RawMessageRow>> {
     let conn = conn.lock().unwrap();
     let mut stmt = conn.prepare(
         "SELECT id, sender, receiver, content, timestamp, saved
@@ -207,7 +217,7 @@ pub async fn fetch_messages_for_user(
          LIMIT ?2",
     )?;
     let mut rows = stmt.query(params![user_id, limit as i64])?;
-    let mut out = Vec::new();
+    let mut out: Vec<RawMessageRow> = Vec::new();
     while let Some(row) = rows.next()? {
         let id: i64 = row.get(0)?;
         let sender: i64 = row.get(1)?;
@@ -215,11 +225,11 @@ pub async fn fetch_messages_for_user(
         let content: String = row.get(3)?;
         let timestamp: String = row.get(4)?;
         let saved_i: i64 = row.get(5)?;
-        out.push(HistoryMessage {
+        out.push(RawMessageRow {
             id,
-            from_user_id: sender,
-            to_user_id: receiver,
-            body: content,
+            sender,
+            receiver,
+            content,
             timestamp,
             saved: saved_i != 0,
         });

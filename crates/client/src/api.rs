@@ -1,8 +1,7 @@
 use crate::StreamSink;
+use flutter_rust_bridge::frb;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
-// use std::sync::atomic::{AtomicBool, Ordering};
-use flutter_rust_bridge::frb;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::Duration;
@@ -10,11 +9,7 @@ use std::time::Duration;
 pub type AuthRequest = rura_models::client_message::AuthRequest;
 pub type AuthResponse = rura_models::client_message::AuthResponse;
 pub type ClientMessage = rura_models::client_message::ClientMessage;
-pub type HistoryRequest = rura_models::messaging::HistoryRequest;
-pub type HistoryResponse = rura_models::messaging::HistoryResponse;
-// NOTE: Do NOT alias HistoryMessage from models here; we expose a FRB-friendly struct below.
-pub type DirectMessageReq = rura_models::messaging::DirectMessageReq;
-pub type DirectMessageEvent = rura_models::messaging::DirectMessageEvent;
+// NOTE: Keep client-local history/message structs to avoid tight coupling to rura_models.
 use rustls::pki_types::{CertificateDer, ServerName};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use std::io::{self, Read, Write};
@@ -30,7 +25,7 @@ pub struct LoginResponse {
     pub user_id: Option<i64>,
 }
 
-/// Dart-friendly history message mirrored from rura_models::messaging::HistoryMessage.
+/// Dart-friendly history message mirrored from server-side model.
 #[frb]
 #[derive(Clone, Debug)]
 pub struct HistoryMessage {
@@ -42,8 +37,18 @@ pub struct HistoryMessage {
     pub saved: bool,
 }
 
-impl From<rura_models::messaging::HistoryMessage> for HistoryMessage {
-    fn from(src: rura_models::messaging::HistoryMessage) -> Self {
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct ModelHistoryMessage {
+    id: i64,
+    from_user_id: i64,
+    to_user_id: i64,
+    body: String,
+    timestamp: String,
+    saved: bool,
+}
+
+impl From<ModelHistoryMessage> for HistoryMessage {
+    fn from(src: ModelHistoryMessage) -> Self {
         Self {
             id: src.id,
             from_user_id: src.from_user_id,
@@ -53,6 +58,18 @@ impl From<rura_models::messaging::HistoryMessage> for HistoryMessage {
             saved: src.saved,
         }
     }
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct HistoryRequest {
+    pub limit: Option<usize>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct HistoryResponse {
+    pub success: bool,
+    pub message: String,
+    pub messages: Vec<ModelHistoryMessage>,
 }
 
 fn build_root_store_from_pem(pem: &str) -> Result<RootCertStore, String> {
@@ -292,6 +309,7 @@ pub struct SendResult {
 
 /// Login and send a direct message in a single TLS session.
 #[frb]
+#[allow(clippy::too_many_arguments)]
 pub fn send_direct_message_tls(
     host: String,
     port: u16,
@@ -313,7 +331,13 @@ pub fn send_direct_message_tls(
         });
     }
 
-    let req = DirectMessageReq {
+    #[derive(serde::Serialize)]
+    struct OutgoingDM {
+        to_user_id: i64,
+        body: String,
+        saved: Option<bool>,
+    }
+    let req = OutgoingDM {
         to_user_id,
         body,
         saved,
@@ -376,8 +400,7 @@ pub fn open_message_stream_tls(
         let mut tls = tls; // move into thread
         let mut buf = [0u8; 1024];
         let mut acc: Vec<u8> = Vec::new();
-        let mut running = true;
-        while running {
+        loop {
             // 1) Drain outgoing writes, if any
             while let Ok(line) = rx.try_recv() {
                 let _ = tls.write_all(line.as_bytes());
@@ -390,19 +413,14 @@ pub fn open_message_stream_tls(
                 Ok(n) => {
                     acc.extend_from_slice(&buf[..n]);
                     // Process complete lines
-                    loop {
-                        if let Some(pos) = acc.iter().position(|&b| b == b'\n') {
-                            let line = acc.drain(..=pos).collect::<Vec<u8>>();
-                            let line =
-                                String::from_utf8_lossy(&line[..line.len().saturating_sub(1)])
-                                    .to_string();
-                            if let Ok(wrapper) = serde_json::from_str::<ClientMessage>(&line) {
-                                if wrapper.command == "message" {
-                                    let _ = sink.add(wrapper.data);
-                                }
+                    while let Some(pos) = acc.iter().position(|&b| b == b'\n') {
+                        let line = acc.drain(..=pos).collect::<Vec<u8>>();
+                        let line = String::from_utf8_lossy(&line[..line.len().saturating_sub(1)])
+                            .to_string();
+                        if let Ok(wrapper) = serde_json::from_str::<ClientMessage>(&line) {
+                            if wrapper.command == "message" {
+                                let _ = sink.add(wrapper.data);
                             }
-                        } else {
-                            break;
                         }
                     }
                 }
@@ -440,7 +458,13 @@ pub fn send_direct_message_over_stream(
     let Some(tx) = tx else {
         return Err("No active stream session for user".to_string());
     };
-    let req = DirectMessageReq {
+    #[derive(serde::Serialize)]
+    struct OutgoingDM2 {
+        to_user_id: i64,
+        body: String,
+        saved: Option<bool>,
+    }
+    let req = OutgoingDM2 {
         to_user_id,
         body,
         saved,
