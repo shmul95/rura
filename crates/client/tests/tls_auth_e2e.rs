@@ -81,13 +81,16 @@ fn generate_tls_materials() -> (String, String) {
     (chain_pem, srv_key_pem)
 }
 
-async fn accept_n_connections(n: usize, db: Arc<Mutex<Connection>>, state: Arc<AppState>, cert_pem_path: &str, key_pem_path: &str) -> u16 {
-    let listener = TcpListener::bind(SocketAddr::V4(SocketAddrV4::new(
-        Ipv4Addr::UNSPECIFIED,
-        0,
-    )))
-    .await
-    .expect("bind");
+async fn accept_n_connections(
+    n: usize,
+    db: Arc<Mutex<Connection>>,
+    state: Arc<AppState>,
+    cert_pem_path: &str,
+    key_pem_path: &str,
+) -> u16 {
+    let listener = TcpListener::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)))
+        .await
+        .expect("bind");
     let local_addr = listener.local_addr().expect("local addr");
     let port = local_addr.port();
     let acceptor = make_tls_acceptor(cert_pem_path, key_pem_path).expect("acceptor");
