@@ -57,4 +57,3 @@ pub fn make_tls_acceptor(cert_path: &str, key_path: &str) -> io::Result<TlsAccep
 
     Ok(TlsAcceptor::from(Arc::new(config)))
 }
-

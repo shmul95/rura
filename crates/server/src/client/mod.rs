@@ -43,4 +43,3 @@ where
     loop_task::handle_client_loop(&mut stream, Arc::clone(&conn), state, client_addr).await?;
     Ok(())
 }
-

@@ -1,9 +1,9 @@
+use argon2::Argon2;
 use argon2::password_hash::{
     Error as PasswordHashError, PasswordHash, PasswordHasher, PasswordVerifier, SaltString,
 };
-use argon2::Argon2;
 use rand_core::OsRng;
-use rusqlite::{ffi, params, Connection, Result as SqliteResult};
+use rusqlite::{Connection, Result as SqliteResult, ffi, params};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
@@ -309,4 +309,3 @@ mod tests {
         assert_eq!(ip, addr.to_string());
     }
 }
-

@@ -11,4 +11,3 @@ pub fn get_local_ip() -> Option<String> {
     }
     None
 }
-

@@ -4,7 +4,7 @@ use crate::utils::db_utils::register_user;
 use rusqlite::Connection;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
-use tokio::io::{duplex, AsyncReadExt, DuplexStream};
+use tokio::io::{AsyncReadExt, DuplexStream, duplex};
 
 fn test_socket_addr() -> SocketAddr {
     SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080)
@@ -262,4 +262,3 @@ async fn test_login_invalid_credentials_error() {
     assert!(response_msg.message.contains("Invalid"));
     assert_eq!(response_msg.user_id, None);
 }
-

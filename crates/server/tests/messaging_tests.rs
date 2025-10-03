@@ -5,7 +5,7 @@ use rura_server::models::client_message::ClientMessage;
 use rusqlite::Connection;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 #[tokio::test]
 async fn test_send_direct_to_online_user_delivers_message() {

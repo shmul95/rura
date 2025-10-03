@@ -3,9 +3,7 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
-use crate::auth::{
-    handle_auth_command_error, handle_auth_login, handle_auth_register,
-};
+use crate::auth::{handle_auth_command_error, handle_auth_login, handle_auth_register};
 use crate::models::client_message::ClientMessage;
 
 pub(super) async fn handle_unauthenticated_message<W>(
@@ -49,4 +47,3 @@ where
     stream.write_all(response.as_bytes()).await?;
     stream.flush().await
 }
-

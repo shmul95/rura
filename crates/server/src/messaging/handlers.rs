@@ -37,4 +37,3 @@ pub async fn send_direct(
     }
     Ok(())
 }
-

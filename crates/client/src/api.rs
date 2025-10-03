@@ -9,7 +9,6 @@ use std::io::{self, Read, Write};
 use std::net::TcpStream;
 use std::sync::{Arc, Once};
 
-
 /// Simple Dart-friendly login response.
 #[frb]
 #[derive(Clone, Debug)]
@@ -94,13 +93,15 @@ pub fn login_tls(
     let _ = read_line(&mut tls);
 
     // Send login envelope
-    let login = AuthRequest { passphrase, password };
+    let login = AuthRequest {
+        passphrase,
+        password,
+    };
     let envelope = ClientMessage {
         command: "login".to_string(),
         data: serde_json::to_string(&login).map_err(|e| format!("Serialize error: {e}"))?,
     };
-    let mut line = serde_json::to_string(&envelope)
-        .map_err(|e| format!("Serialize error: {e}"))?;
+    let mut line = serde_json::to_string(&envelope).map_err(|e| format!("Serialize error: {e}"))?;
     line.push('\n');
     tls.write_all(line.as_bytes())
         .map_err(|e| format!("Write failed: {e}"))?;
@@ -121,7 +122,11 @@ pub fn login_tls(
     tls.conn.send_close_notify();
     let _ = tls.flush();
 
-    Ok(LoginResponse { success: resp.success, message: resp.message, user_id: resp.user_id })
+    Ok(LoginResponse {
+        success: resp.success,
+        message: resp.message,
+        user_id: resp.user_id,
+    })
 }
 
 /// Register a new user against the TLS-only server and return the auth response.
@@ -162,13 +167,15 @@ pub fn register_tls(
     let _ = read_line(&mut tls);
 
     // Send register envelope
-    let register = AuthRequest { passphrase, password };
+    let register = AuthRequest {
+        passphrase,
+        password,
+    };
     let envelope = ClientMessage {
         command: "register".to_string(),
         data: serde_json::to_string(&register).map_err(|e| format!("Serialize error: {e}"))?,
     };
-    let mut line = serde_json::to_string(&envelope)
-        .map_err(|e| format!("Serialize error: {e}"))?;
+    let mut line = serde_json::to_string(&envelope).map_err(|e| format!("Serialize error: {e}"))?;
     line.push('\n');
     tls.write_all(line.as_bytes())
         .map_err(|e| format!("Write failed: {e}"))?;
@@ -188,5 +195,9 @@ pub fn register_tls(
     tls.conn.send_close_notify();
     let _ = tls.flush();
 
-    Ok(LoginResponse { success: resp.success, message: resp.message, user_id: resp.user_id })
+    Ok(LoginResponse {
+        success: resp.success,
+        message: resp.message,
+        user_id: resp.user_id,
+    })
 }

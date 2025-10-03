@@ -127,7 +127,13 @@ where
     W: AsyncWrite + Unpin,
 {
     match serde_json::from_str::<AuthRequest>(&msg.data) {
-        Ok(login_data) => match authenticate_user(Arc::clone(&conn), &login_data.passphrase, &login_data.password).await {
+        Ok(login_data) => match authenticate_user(
+            Arc::clone(&conn),
+            &login_data.passphrase,
+            &login_data.password,
+        )
+        .await
+        {
             Ok(Some(user_id)) => handle_auth_success(stream, client_addr, user_id).await,
             Ok(None) => handle_auth_failure(stream).await,
             Err(e) => handle_auth_db_error(stream, e).await,
@@ -146,7 +152,13 @@ where
     W: AsyncWrite + Unpin,
 {
     match serde_json::from_str::<AuthRequest>(&msg.data) {
-        Ok(register_data) => match register_user(Arc::clone(&conn), &register_data.passphrase, &register_data.password).await {
+        Ok(register_data) => match register_user(
+            Arc::clone(&conn),
+            &register_data.passphrase,
+            &register_data.password,
+        )
+        .await
+        {
             Ok(user_id) => handle_registration_success(stream, client_addr, user_id).await,
             Err(e) => handle_registration_error(stream, e).await,
         },

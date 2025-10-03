@@ -14,4 +14,3 @@ pub struct Args {
     #[arg(long, required = true)]
     pub tls_key: String,
 }
-

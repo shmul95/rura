@@ -26,4 +26,3 @@ pub struct SaveResponse {
     pub message_id: Option<i64>,
     pub saved: Option<bool>,
 }
-

@@ -18,4 +18,3 @@ pub struct AuthResponse {
     pub message: String,
     pub user_id: Option<i64>,
 }
-
