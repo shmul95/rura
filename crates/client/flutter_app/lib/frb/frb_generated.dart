@@ -64,7 +64,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => -548911398;
+  int get rustContentHash => 2067188788;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -75,6 +75,15 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
 }
 
 abstract class RustLibApi extends BaseApi {
+  Future<HistoryBundle> crateApiLoginAndFetchHistoryTls({
+    required String host,
+    required int port,
+    required String caPem,
+    required String passphrase,
+    required String password,
+    BigInt? limit,
+  });
+
   Future<LoginResponse> crateApiLoginTls({
     required String host,
     required int port,
@@ -83,12 +92,47 @@ abstract class RustLibApi extends BaseApi {
     required String password,
   });
 
+  Stream<String> crateApiOpenMessageStreamTls({
+    required String host,
+    required int port,
+    required String caPem,
+    required String passphrase,
+    required String password,
+  });
+
+  Future<HistoryBundle> crateApiRegisterAndFetchHistoryTls({
+    required String host,
+    required int port,
+    required String caPem,
+    required String passphrase,
+    required String password,
+    BigInt? limit,
+  });
+
   Future<LoginResponse> crateApiRegisterTls({
     required String host,
     required int port,
     required String caPem,
     required String passphrase,
     required String password,
+  });
+
+  Future<void> crateApiSendDirectMessageOverStream({
+    required PlatformInt64 userId,
+    required PlatformInt64 toUserId,
+    required String body,
+    bool? saved,
+  });
+
+  Future<SendResult> crateApiSendDirectMessageTls({
+    required String host,
+    required int port,
+    required String caPem,
+    required String passphrase,
+    required String password,
+    required PlatformInt64 toUserId,
+    required String body,
+    bool? saved,
   });
 }
 
@@ -101,12 +145,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   });
 
   @override
-  Future<LoginResponse> crateApiLoginTls({
+  Future<HistoryBundle> crateApiLoginAndFetchHistoryTls({
     required String host,
     required int port,
     required String caPem,
     required String passphrase,
     required String password,
+    BigInt? limit,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -117,6 +162,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_String(caPem, serializer);
           sse_encode_String(passphrase, serializer);
           sse_encode_String(password, serializer);
+          sse_encode_opt_box_autoadd_usize(limit, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -125,23 +171,24 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           );
         },
         codec: SseCodec(
-          decodeSuccessData: sse_decode_login_response,
+          decodeSuccessData: sse_decode_history_bundle,
           decodeErrorData: sse_decode_String,
         ),
-        constMeta: kCrateApiLoginTlsConstMeta,
-        argValues: [host, port, caPem, passphrase, password],
+        constMeta: kCrateApiLoginAndFetchHistoryTlsConstMeta,
+        argValues: [host, port, caPem, passphrase, password, limit],
         apiImpl: this,
       ),
     );
   }
 
-  TaskConstMeta get kCrateApiLoginTlsConstMeta => const TaskConstMeta(
-    debugName: "login_tls",
-    argNames: ["host", "port", "caPem", "passphrase", "password"],
-  );
+  TaskConstMeta get kCrateApiLoginAndFetchHistoryTlsConstMeta =>
+      const TaskConstMeta(
+        debugName: "login_and_fetch_history_tls",
+        argNames: ["host", "port", "caPem", "passphrase", "password", "limit"],
+      );
 
   @override
-  Future<LoginResponse> crateApiRegisterTls({
+  Future<LoginResponse> crateApiLoginTls({
     required String host,
     required int port,
     required String caPem,
@@ -168,6 +215,135 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeSuccessData: sse_decode_login_response,
           decodeErrorData: sse_decode_String,
         ),
+        constMeta: kCrateApiLoginTlsConstMeta,
+        argValues: [host, port, caPem, passphrase, password],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiLoginTlsConstMeta => const TaskConstMeta(
+    debugName: "login_tls",
+    argNames: ["host", "port", "caPem", "passphrase", "password"],
+  );
+
+  @override
+  Stream<String> crateApiOpenMessageStreamTls({
+    required String host,
+    required int port,
+    required String caPem,
+    required String passphrase,
+    required String password,
+  }) {
+    final sink = RustStreamSink<String>();
+    unawaited(
+      handler.executeNormal(
+        NormalTask(
+          callFfi: (port_) {
+            final serializer = SseSerializer(generalizedFrbRustBinding);
+            sse_encode_String(host, serializer);
+            sse_encode_u_16(port, serializer);
+            sse_encode_String(caPem, serializer);
+            sse_encode_String(passphrase, serializer);
+            sse_encode_String(password, serializer);
+            sse_encode_StreamSink_String_Sse(sink, serializer);
+            pdeCallFfi(
+              generalizedFrbRustBinding,
+              serializer,
+              funcId: 3,
+              port: port_,
+            );
+          },
+          codec: SseCodec(
+            decodeSuccessData: sse_decode_unit,
+            decodeErrorData: sse_decode_String,
+          ),
+          constMeta: kCrateApiOpenMessageStreamTlsConstMeta,
+          argValues: [host, port, caPem, passphrase, password, sink],
+          apiImpl: this,
+        ),
+      ),
+    );
+    return sink.stream;
+  }
+
+  TaskConstMeta get kCrateApiOpenMessageStreamTlsConstMeta =>
+      const TaskConstMeta(
+        debugName: "open_message_stream_tls",
+        argNames: ["host", "port", "caPem", "passphrase", "password", "sink"],
+      );
+
+  @override
+  Future<HistoryBundle> crateApiRegisterAndFetchHistoryTls({
+    required String host,
+    required int port,
+    required String caPem,
+    required String passphrase,
+    required String password,
+    BigInt? limit,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(host, serializer);
+          sse_encode_u_16(port, serializer);
+          sse_encode_String(caPem, serializer);
+          sse_encode_String(passphrase, serializer);
+          sse_encode_String(password, serializer);
+          sse_encode_opt_box_autoadd_usize(limit, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 4,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_history_bundle,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiRegisterAndFetchHistoryTlsConstMeta,
+        argValues: [host, port, caPem, passphrase, password, limit],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiRegisterAndFetchHistoryTlsConstMeta =>
+      const TaskConstMeta(
+        debugName: "register_and_fetch_history_tls",
+        argNames: ["host", "port", "caPem", "passphrase", "password", "limit"],
+      );
+
+  @override
+  Future<LoginResponse> crateApiRegisterTls({
+    required String host,
+    required int port,
+    required String caPem,
+    required String passphrase,
+    required String password,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(host, serializer);
+          sse_encode_u_16(port, serializer);
+          sse_encode_String(caPem, serializer);
+          sse_encode_String(passphrase, serializer);
+          sse_encode_String(password, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 5,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_login_response,
+          decodeErrorData: sse_decode_String,
+        ),
         constMeta: kCrateApiRegisterTlsConstMeta,
         argValues: [host, port, caPem, passphrase, password],
         apiImpl: this,
@@ -179,6 +355,122 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     debugName: "register_tls",
     argNames: ["host", "port", "caPem", "passphrase", "password"],
   );
+
+  @override
+  Future<void> crateApiSendDirectMessageOverStream({
+    required PlatformInt64 userId,
+    required PlatformInt64 toUserId,
+    required String body,
+    bool? saved,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_i_64(userId, serializer);
+          sse_encode_i_64(toUserId, serializer);
+          sse_encode_String(body, serializer);
+          sse_encode_opt_box_autoadd_bool(saved, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 6,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiSendDirectMessageOverStreamConstMeta,
+        argValues: [userId, toUserId, body, saved],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSendDirectMessageOverStreamConstMeta =>
+      const TaskConstMeta(
+        debugName: "send_direct_message_over_stream",
+        argNames: ["userId", "toUserId", "body", "saved"],
+      );
+
+  @override
+  Future<SendResult> crateApiSendDirectMessageTls({
+    required String host,
+    required int port,
+    required String caPem,
+    required String passphrase,
+    required String password,
+    required PlatformInt64 toUserId,
+    required String body,
+    bool? saved,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(host, serializer);
+          sse_encode_u_16(port, serializer);
+          sse_encode_String(caPem, serializer);
+          sse_encode_String(passphrase, serializer);
+          sse_encode_String(password, serializer);
+          sse_encode_i_64(toUserId, serializer);
+          sse_encode_String(body, serializer);
+          sse_encode_opt_box_autoadd_bool(saved, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 7,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_send_result,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiSendDirectMessageTlsConstMeta,
+        argValues: [
+          host,
+          port,
+          caPem,
+          passphrase,
+          password,
+          toUserId,
+          body,
+          saved,
+        ],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSendDirectMessageTlsConstMeta =>
+      const TaskConstMeta(
+        debugName: "send_direct_message_tls",
+        argNames: [
+          "host",
+          "port",
+          "caPem",
+          "passphrase",
+          "password",
+          "toUserId",
+          "body",
+          "saved",
+        ],
+      );
+
+  @protected
+  AnyhowException dco_decode_AnyhowException(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return AnyhowException(raw as String);
+  }
+
+  @protected
+  RustStreamSink<String> dco_decode_StreamSink_String_Sse(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    throw UnimplementedError();
+  }
 
   @protected
   String dco_decode_String(dynamic raw) {
@@ -193,15 +485,63 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  bool dco_decode_box_autoadd_bool(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as bool;
+  }
+
+  @protected
   PlatformInt64 dco_decode_box_autoadd_i_64(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_i_64(raw);
   }
 
   @protected
+  BigInt dco_decode_box_autoadd_usize(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_usize(raw);
+  }
+
+  @protected
+  HistoryBundle dco_decode_history_bundle(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 4)
+      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    return HistoryBundle(
+      success: dco_decode_bool(arr[0]),
+      message: dco_decode_String(arr[1]),
+      userId: dco_decode_opt_box_autoadd_i_64(arr[2]),
+      messages: dco_decode_list_history_message(arr[3]),
+    );
+  }
+
+  @protected
+  HistoryMessage dco_decode_history_message(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 6)
+      throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
+    return HistoryMessage(
+      id: dco_decode_i_64(arr[0]),
+      fromUserId: dco_decode_i_64(arr[1]),
+      toUserId: dco_decode_i_64(arr[2]),
+      body: dco_decode_String(arr[3]),
+      timestamp: dco_decode_String(arr[4]),
+      saved: dco_decode_bool(arr[5]),
+    );
+  }
+
+  @protected
   PlatformInt64 dco_decode_i_64(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dcoDecodeI64(raw);
+  }
+
+  @protected
+  List<HistoryMessage> dco_decode_list_history_message(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_history_message).toList();
   }
 
   @protected
@@ -224,9 +564,33 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  bool? dco_decode_opt_box_autoadd_bool(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null ? null : dco_decode_box_autoadd_bool(raw);
+  }
+
+  @protected
   PlatformInt64? dco_decode_opt_box_autoadd_i_64(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_box_autoadd_i_64(raw);
+  }
+
+  @protected
+  BigInt? dco_decode_opt_box_autoadd_usize(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null ? null : dco_decode_box_autoadd_usize(raw);
+  }
+
+  @protected
+  SendResult dco_decode_send_result(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2)
+      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return SendResult(
+      success: dco_decode_bool(arr[0]),
+      message: dco_decode_String(arr[1]),
+    );
   }
 
   @protected
@@ -239,6 +603,33 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   int dco_decode_u_8(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as int;
+  }
+
+  @protected
+  void dco_decode_unit(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return;
+  }
+
+  @protected
+  BigInt dco_decode_usize(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dcoDecodeU64(raw);
+  }
+
+  @protected
+  AnyhowException sse_decode_AnyhowException(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var inner = sse_decode_String(deserializer);
+    return AnyhowException(inner);
+  }
+
+  @protected
+  RustStreamSink<String> sse_decode_StreamSink_String_Sse(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    throw UnimplementedError('Unreachable ()');
   }
 
   @protected
@@ -255,15 +646,75 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  bool sse_decode_box_autoadd_bool(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_bool(deserializer));
+  }
+
+  @protected
   PlatformInt64 sse_decode_box_autoadd_i_64(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_i_64(deserializer));
   }
 
   @protected
+  BigInt sse_decode_box_autoadd_usize(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_usize(deserializer));
+  }
+
+  @protected
+  HistoryBundle sse_decode_history_bundle(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_success = sse_decode_bool(deserializer);
+    var var_message = sse_decode_String(deserializer);
+    var var_userId = sse_decode_opt_box_autoadd_i_64(deserializer);
+    var var_messages = sse_decode_list_history_message(deserializer);
+    return HistoryBundle(
+      success: var_success,
+      message: var_message,
+      userId: var_userId,
+      messages: var_messages,
+    );
+  }
+
+  @protected
+  HistoryMessage sse_decode_history_message(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_id = sse_decode_i_64(deserializer);
+    var var_fromUserId = sse_decode_i_64(deserializer);
+    var var_toUserId = sse_decode_i_64(deserializer);
+    var var_body = sse_decode_String(deserializer);
+    var var_timestamp = sse_decode_String(deserializer);
+    var var_saved = sse_decode_bool(deserializer);
+    return HistoryMessage(
+      id: var_id,
+      fromUserId: var_fromUserId,
+      toUserId: var_toUserId,
+      body: var_body,
+      timestamp: var_timestamp,
+      saved: var_saved,
+    );
+  }
+
+  @protected
   PlatformInt64 sse_decode_i_64(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getPlatformInt64();
+  }
+
+  @protected
+  List<HistoryMessage> sse_decode_list_history_message(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <HistoryMessage>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_history_message(deserializer));
+    }
+    return ans_;
   }
 
   @protected
@@ -287,6 +738,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  bool? sse_decode_opt_box_autoadd_bool(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_box_autoadd_bool(deserializer));
+    } else {
+      return null;
+    }
+  }
+
+  @protected
   PlatformInt64? sse_decode_opt_box_autoadd_i_64(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
@@ -295,6 +757,25 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     } else {
       return null;
     }
+  }
+
+  @protected
+  BigInt? sse_decode_opt_box_autoadd_usize(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_box_autoadd_usize(deserializer));
+    } else {
+      return null;
+    }
+  }
+
+  @protected
+  SendResult sse_decode_send_result(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_success = sse_decode_bool(deserializer);
+    var var_message = sse_decode_String(deserializer);
+    return SendResult(success: var_success, message: var_message);
   }
 
   @protected
@@ -310,9 +791,46 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_decode_unit(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+  }
+
+  @protected
+  BigInt sse_decode_usize(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return deserializer.buffer.getBigUint64();
+  }
+
+  @protected
   int sse_decode_i_32(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getInt32();
+  }
+
+  @protected
+  void sse_encode_AnyhowException(
+    AnyhowException self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.message, serializer);
+  }
+
+  @protected
+  void sse_encode_StreamSink_String_Sse(
+    RustStreamSink<String> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(
+      self.setupAndSerialize(
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+      ),
+      serializer,
+    );
   }
 
   @protected
@@ -328,6 +846,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_box_autoadd_bool(bool self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_bool(self, serializer);
+  }
+
+  @protected
   void sse_encode_box_autoadd_i_64(
     PlatformInt64 self,
     SseSerializer serializer,
@@ -337,9 +861,50 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_box_autoadd_usize(BigInt self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_usize(self, serializer);
+  }
+
+  @protected
+  void sse_encode_history_bundle(HistoryBundle self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_bool(self.success, serializer);
+    sse_encode_String(self.message, serializer);
+    sse_encode_opt_box_autoadd_i_64(self.userId, serializer);
+    sse_encode_list_history_message(self.messages, serializer);
+  }
+
+  @protected
+  void sse_encode_history_message(
+    HistoryMessage self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_64(self.id, serializer);
+    sse_encode_i_64(self.fromUserId, serializer);
+    sse_encode_i_64(self.toUserId, serializer);
+    sse_encode_String(self.body, serializer);
+    sse_encode_String(self.timestamp, serializer);
+    sse_encode_bool(self.saved, serializer);
+  }
+
+  @protected
   void sse_encode_i_64(PlatformInt64 self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putPlatformInt64(self);
+  }
+
+  @protected
+  void sse_encode_list_history_message(
+    List<HistoryMessage> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_history_message(item, serializer);
+    }
   }
 
   @protected
@@ -361,6 +926,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_opt_box_autoadd_bool(bool? self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_box_autoadd_bool(self, serializer);
+    }
+  }
+
+  @protected
   void sse_encode_opt_box_autoadd_i_64(
     PlatformInt64? self,
     SseSerializer serializer,
@@ -374,6 +949,26 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_opt_box_autoadd_usize(
+    BigInt? self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_box_autoadd_usize(self, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_send_result(SendResult self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_bool(self.success, serializer);
+    sse_encode_String(self.message, serializer);
+  }
+
+  @protected
   void sse_encode_u_16(int self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putUint16(self);
@@ -383,6 +978,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   void sse_encode_u_8(int self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putUint8(self);
+  }
+
+  @protected
+  void sse_encode_unit(void self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+  }
+
+  @protected
+  void sse_encode_usize(BigInt self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    serializer.buffer.putBigUint64(self);
   }
 
   @protected

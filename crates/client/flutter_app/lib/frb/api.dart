@@ -6,8 +6,8 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `build_root_store_from_pem`, `read_line`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `fmt`
+// These functions are ignored because they are not marked as `pub`: `auth_over_stream`, `build_root_store_from_pem`, `fetch_history_over_stream`, `make_tls_stream`, `read_line`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`, `from`
 
 /// Login to the TLS-only server and return the auth response.
 ///
@@ -44,6 +44,157 @@ Future<LoginResponse> registerTls({
   password: password,
 );
 
+/// Login and send a direct message in a single TLS session.
+Future<SendResult> sendDirectMessageTls({
+  required String host,
+  required int port,
+  required String caPem,
+  required String passphrase,
+  required String password,
+  required PlatformInt64 toUserId,
+  required String body,
+  bool? saved,
+}) => RustLib.instance.api.crateApiSendDirectMessageTls(
+  host: host,
+  port: port,
+  caPem: caPem,
+  passphrase: passphrase,
+  password: password,
+  toUserId: toUserId,
+  body: body,
+  saved: saved,
+);
+
+Stream<String> openMessageStreamTls({
+  required String host,
+  required int port,
+  required String caPem,
+  required String passphrase,
+  required String password,
+}) => RustLib.instance.api.crateApiOpenMessageStreamTls(
+  host: host,
+  port: port,
+  caPem: caPem,
+  passphrase: passphrase,
+  password: password,
+);
+
+/// Send a direct message using an existing open stream session for the given user_id.
+Future<void> sendDirectMessageOverStream({
+  required PlatformInt64 userId,
+  required PlatformInt64 toUserId,
+  required String body,
+  bool? saved,
+}) => RustLib.instance.api.crateApiSendDirectMessageOverStream(
+  userId: userId,
+  toUserId: toUserId,
+  body: body,
+  saved: saved,
+);
+
+/// Login and fetch message history in one TLS session.
+Future<HistoryBundle> loginAndFetchHistoryTls({
+  required String host,
+  required int port,
+  required String caPem,
+  required String passphrase,
+  required String password,
+  BigInt? limit,
+}) => RustLib.instance.api.crateApiLoginAndFetchHistoryTls(
+  host: host,
+  port: port,
+  caPem: caPem,
+  passphrase: passphrase,
+  password: password,
+  limit: limit,
+);
+
+/// Register and fetch message history in one TLS session.
+Future<HistoryBundle> registerAndFetchHistoryTls({
+  required String host,
+  required int port,
+  required String caPem,
+  required String passphrase,
+  required String password,
+  BigInt? limit,
+}) => RustLib.instance.api.crateApiRegisterAndFetchHistoryTls(
+  host: host,
+  port: port,
+  caPem: caPem,
+  passphrase: passphrase,
+  password: password,
+  limit: limit,
+);
+
+/// Bundle returned by login/register + history.
+class HistoryBundle {
+  final bool success;
+  final String message;
+  final PlatformInt64? userId;
+  final List<HistoryMessage> messages;
+
+  const HistoryBundle({
+    required this.success,
+    required this.message,
+    this.userId,
+    required this.messages,
+  });
+
+  @override
+  int get hashCode =>
+      success.hashCode ^ message.hashCode ^ userId.hashCode ^ messages.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is HistoryBundle &&
+          runtimeType == other.runtimeType &&
+          success == other.success &&
+          message == other.message &&
+          userId == other.userId &&
+          messages == other.messages;
+}
+
+/// Dart-friendly history message mirrored from rura_models::messaging::HistoryMessage.
+class HistoryMessage {
+  final PlatformInt64 id;
+  final PlatformInt64 fromUserId;
+  final PlatformInt64 toUserId;
+  final String body;
+  final String timestamp;
+  final bool saved;
+
+  const HistoryMessage({
+    required this.id,
+    required this.fromUserId,
+    required this.toUserId,
+    required this.body,
+    required this.timestamp,
+    required this.saved,
+  });
+
+  @override
+  int get hashCode =>
+      id.hashCode ^
+      fromUserId.hashCode ^
+      toUserId.hashCode ^
+      body.hashCode ^
+      timestamp.hashCode ^
+      saved.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is HistoryMessage &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          fromUserId == other.fromUserId &&
+          toUserId == other.toUserId &&
+          body == other.body &&
+          timestamp == other.timestamp &&
+          saved == other.saved;
+}
+
 /// Simple Dart-friendly login response.
 class LoginResponse {
   final bool success;
@@ -67,4 +218,23 @@ class LoginResponse {
           success == other.success &&
           message == other.message &&
           userId == other.userId;
+}
+
+/// Simple result type for one-off commands.
+class SendResult {
+  final bool success;
+  final String message;
+
+  const SendResult({required this.success, required this.message});
+
+  @override
+  int get hashCode => success.hashCode ^ message.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SendResult &&
+          runtimeType == other.runtimeType &&
+          success == other.success &&
+          message == other.message;
 }

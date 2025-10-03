@@ -1,3 +1,4 @@
+use crate::messaging::models::HistoryMessage;
 use argon2::Argon2;
 use argon2::password_hash::{
     Error as PasswordHashError, PasswordHash, PasswordHasher, PasswordVerifier, SaltString,
@@ -190,6 +191,40 @@ pub async fn set_message_saved(
         params![if saved { 1 } else { 0 }, message_id, user_id],
     )?;
     Ok(updated == 1)
+}
+
+pub async fn fetch_messages_for_user(
+    conn: Arc<Mutex<Connection>>,
+    user_id: i64,
+    limit: usize,
+) -> SqliteResult<Vec<HistoryMessage>> {
+    let conn = conn.lock().unwrap();
+    let mut stmt = conn.prepare(
+        "SELECT id, sender, receiver, content, timestamp, saved
+         FROM messages
+         WHERE sender = ?1 OR receiver = ?1
+         ORDER BY id ASC
+         LIMIT ?2",
+    )?;
+    let mut rows = stmt.query(params![user_id, limit as i64])?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next()? {
+        let id: i64 = row.get(0)?;
+        let sender: i64 = row.get(1)?;
+        let receiver: i64 = row.get(2)?;
+        let content: String = row.get(3)?;
+        let timestamp: String = row.get(4)?;
+        let saved_i: i64 = row.get(5)?;
+        out.push(HistoryMessage {
+            id,
+            from_user_id: sender,
+            to_user_id: receiver,
+            body: content,
+            timestamp,
+            saved: saved_i != 0,
+        });
+    }
+    Ok(out)
 }
 
 #[cfg(test)]

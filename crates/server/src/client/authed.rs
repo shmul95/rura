@@ -4,7 +4,9 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
 use crate::messaging::handlers::send_direct;
-use crate::messaging::models::{DirectMessageReq, SaveRequest, SaveResponse};
+use crate::messaging::models::{
+    DirectMessageReq, HistoryRequest, HistoryResponse, SaveRequest, SaveResponse,
+};
 use crate::messaging::state::AppState;
 use crate::models::client_message::ClientMessage;
 use crate::utils::db_utils::set_message_saved;
@@ -42,6 +44,50 @@ pub(super) async fn handle_client_message(
                         }
                     }
                 }
+                "history" => match serde_json::from_str::<HistoryRequest>(&msg.data) {
+                    Ok(req) => {
+                        let limit = req.limit.unwrap_or(100);
+                        match crate::utils::db_utils::fetch_messages_for_user(
+                            Arc::clone(&conn),
+                            user_id,
+                            limit,
+                        )
+                        .await
+                        {
+                            Ok(messages) => {
+                                let resp = HistoryResponse {
+                                    success: true,
+                                    message: "OK".to_string(),
+                                    messages,
+                                };
+                                let wrapper = ClientMessage {
+                                    command: "history_response".to_string(),
+                                    data: serde_json::to_string(&resp).unwrap(),
+                                };
+                                let _ = outbound.send(wrapper);
+                            }
+                            Err(_) => {
+                                let resp = HistoryResponse {
+                                    success: false,
+                                    message: "Failed to load history".to_string(),
+                                    messages: Vec::new(),
+                                };
+                                let wrapper = ClientMessage {
+                                    command: "history_response".to_string(),
+                                    data: serde_json::to_string(&resp).unwrap(),
+                                };
+                                let _ = outbound.send(wrapper);
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        let err = ClientMessage {
+                            command: "error".to_string(),
+                            data: "Invalid history format".to_string(),
+                        };
+                        let _ = outbound.send(err);
+                    }
+                },
                 "save" => match serde_json::from_str::<SaveRequest>(&msg.data) {
                     Ok(req) => {
                         let saved_flag = req.saved.unwrap_or(true);
