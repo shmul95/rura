@@ -8,7 +8,7 @@ This document describes the workspace layout, key crates, and request flow after
   - Re-exports shared models so paths like `rura_server::models::client_message::ClientMessage` are available to tests/consumers.
 - `crates/models` (crate name: `rura_models`)
   - Shared protocol DTOs used by both server and future clients (e.g., Flutter via FRB).
-- `crates/rura_client`
+- `crates/client` (crate name: `rura_client`)
   - Placeholder for a Rust client SDK (to be bridged with Flutter via flutter_rust_bridge).
 
 ## Workspace Diagram
@@ -39,7 +39,7 @@ Legend
 
 Docs: [PROTOCOL.md](PROTOCOL.md) and [DATABASE.md](DATABASE.md) remain valid and describe wire format and persistence. The server is TLS-only.
 
-## Server (crate `rura`)
+## Server (crate `rura_server`)
 - Entry: `crates/server/src/main.rs`
   - Parses CLI, initializes DB (`utils::db_utils::init_db`), creates `messaging::state::AppState`, builds Rustls `TlsAcceptor`, listens, accepts, and spawns `client::handle_client` per connection.
 - Modules: `crates/server/src/lib.rs` exposes:

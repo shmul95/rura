@@ -36,7 +36,7 @@ Error cases (auth phase)
 
 State
 - After successful auth, the server tracks the connection’s `user_id`.
-- Messages are delivered only to online recipients (no persistence yet).
+- Messages are delivered to online recipients; all messages are persisted.
 
 Client → Server (send)
 - Direct message request (inside `data`):

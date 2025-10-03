@@ -39,16 +39,24 @@ This repo exposes a client crate (`crates/client`) to bridge Rust to Flutter usi
   - macOS: `export DYLD_LIBRARY_PATH=../rura/target/debug:$DYLD_LIBRARY_PATH`
   - Windows (PowerShell): `$env:PATH += ';..\\rura\\target\\debug'`
 
-## 4) Call Rust from Dart (hello example)
+## 4) Call Rust from Dart (login example)
 
 - After codegen, import the generated files in your Flutter app (e.g., `lib/main.dart`):
   - `import 'frb/api.dart';`
   - `import 'frb/frb_generated.dart';`
-- Then call the generated API that exposes the `hello()` function from Rust. The exact shape may vary by FRB version (class vs. top-level function). Look for `hello` in `lib/bridge_generated.dart` and invoke it, e.g.:
-  - `final result = await hello(); // or await api.hello();`
-  - `print(result); // "Hello from Rust"`
+- Then call the generated API that exposes your Rust functions. In this repo, `#[frb] pub fn login_tls(...)` becomes `loginTls(...)` in Dart. Example:
+  - ```dart
+    final resp = await loginTls(
+      host: 'localhost',
+      port: 8443,
+      caPem: await File('server.crt').readAsString(),
+      passphrase: 'alice',
+      password: 'secret',
+    );
+    print('success=${resp.success} userId=${resp.userId} message=${resp.message}');
+    ```
 
 Notes
 - FRB will regenerate `crates/client/src/bridge_generated.rs` and `lib/bridge_generated.dart` on each codegen run.
 - For packaging, consider copying the built `.so/.dylib/.dll` next to your Flutter app binary or customizing the loader.
-- To add real features, extend `crates/client/src/api.rs` with `#[frb]` functions (connect/login/send/streams) and re-run codegen.
+- To add real features, extend `crates/client/src/api.rs` with `#[frb]` functions (e.g., `register_tls`, messaging) and re-run codegen.

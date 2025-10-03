@@ -54,14 +54,14 @@ Login instead of register (if users already exist)
   - Invalid message payload → `error: Invalid message format`
   - Unknown recipient → dropped silently (no ack)
 
-Full details: [PROTOCOL.md](PROTOCOL.md)
+Full details: [docs/PROTOCOL.md](docs/PROTOCOL.md)
 
 ## Architecture Summary
 - Workspace
   - `crates/server` (crate name: `rura_server`): server binary + modules
   - `crates/models` (crate name: `rura_models`): shared protocol DTOs
   - `crates/client` (crate name: `rura_client`): Rust client SDK (skeleton for FRB)
-- Server modules (`rura`)
+- Server modules (`rura_server`)
   - Connection lifecycle: `crates/server/src/client/*`
   - Auth logic: `crates/server/src/auth/*`
   - Messaging: `crates/server/src/messaging/*`
@@ -101,8 +101,8 @@ See: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for a module-by-module map and
   - Generate: `cargo llvm-cov --all-features --workspace --html`
   - Open report: `target/llvm-cov/html/index.html`
 
-- CI threshold
-  - GitHub Actions enforces a minimum of 80% coverage.
+- CI coverage
+  - GitHub Actions generates and uploads coverage reports; target ≥80% locally.
 
 ## Configuration
 - CLI: `--port <PORT>` (default 8080). See `crates/server/src/models/args.rs`.
