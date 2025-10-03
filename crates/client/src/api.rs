@@ -417,6 +417,7 @@ pub fn open_message_stream_tls(
                         let line = acc.drain(..=pos).collect::<Vec<u8>>();
                         let line = String::from_utf8_lossy(&line[..line.len().saturating_sub(1)])
                             .to_string();
+                        #[allow(clippy::collapsible_if)]
                         if let Ok(wrapper) = serde_json::from_str::<ClientMessage>(&line) {
                             if wrapper.command == "message" {
                                 let _ = sink.add(wrapper.data);
