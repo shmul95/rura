@@ -1,0 +1,22 @@
+[package]
+name = "rura_client"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+rura_models = { path = "../models" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+flutter_rust_bridge = "=2.11.1"
+rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }
+rustls-pemfile = "2.0"
+
+[dev-dependencies]
+tokio = { version = "1.47", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util"] }
+rcgen = "0.12"
+tempfile = "3"
+rusqlite = { version = "0.37.0", features = ["bundled"] }
+rura_server = { path = "../server" }

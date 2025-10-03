@@ -3,3 +3,7 @@
 /bak
 
 *.db
+server.crt
+server.key
+crates/client/target
+certs

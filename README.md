@@ -6,26 +6,30 @@ A small asynchronous TCP server written in Rust (Tokio) with:
 - Simple newline-delimited JSON protocol
 
 Quick links
-- Protocol: [PROTOCOL.md](PROTOCOL.md)
-- Architecture: [ARCHITECTURE.md](ARCHITECTURE.md)
-- Database & Auth: [DATABASE.md](DATABASE.md)
+- Protocol: [docs/PROTOCOL.md](docs/PROTOCOL.md)
+- Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- Database & Auth: [docs/DATABASE.md](docs/DATABASE.md)
+- Flutter/FRB Setup: [docs/FRB_SETUP.md](docs/FRB_SETUP.md)
 
 ## Quick Start
 
 Build and run (TLS-only)
 - Generate a self-signed cert (dev):
   - `openssl req -x509 -newkey rsa:2048 -keyout server.key -out server.crt -days 365 -nodes -subj '/CN=localhost'`
-- Start the server (TLS only):
+- Start the server (from server crate):
+  - `cd crates/server`
   - `cargo run -- --port 8443 --tls-cert server.crt --tls-key server.key`
+  - If your certs are at repo root, use: `cargo run -- --port 8443 --tls-cert ../../server.crt --tls-key ../../server.key`
 
-Try it with two terminals (Alice and Bob)
-- In two shells: `nc 127.0.0.1 8080`
-- Register Alice:
+Connect with TLS (two terminals)
+- Open two TLS clients using OpenSSL:
+  - Terminal A: `openssl s_client -connect 127.0.0.1:8443 -servername localhost -CAfile server.crt -quiet`
+  - Terminal B: `openssl s_client -connect 127.0.0.1:8443 -servername localhost -CAfile server.crt -quiet`
+- Register Alice (A):
   - `{"command":"register","data":"{\"passphrase\":\"alice\",\"password\":\"secret\"}"}`
-- Register Bob:
+- Register Bob (B):
   - `{"command":"register","data":"{\"passphrase\":\"bob\",\"password\":\"secret\"}"}`
-- Note their returned `user_id` values from the `auth_response`.
-- Send a message (Alice → Bob, replace 2 with Bob’s user_id):
+- Send a message (A → B; replace 2 with Bob’s user_id):
   - `{"command":"message","data":"{\"to_user_id\":2,\"body\":\"hello world\"}"}`
 - Bob receives:
   - `{"command":"message","data":"{\"from_user_id\":<alice_id>,\"body\":\"hello world\"}"}`
@@ -50,34 +54,41 @@ Login instead of register (if users already exist)
   - Invalid message payload → `error: Invalid message format`
   - Unknown recipient → dropped silently (no ack)
 
-Full details: [PROTOCOL.md](PROTOCOL.md)
+Full details: [docs/PROTOCOL.md](docs/PROTOCOL.md)
 
 ## Architecture Summary
-- Connection lifecycle and read/write loop: `src/client/*`
-- Auth domain logic: `src/auth/*`
-- Messaging registry and routing: `src/messaging/*`
-- DB helpers: `src/utils/db_utils.rs`
-- Models: `src/models/*`
+- Workspace
+  - `crates/server` (crate name: `rura_server`): server binary + modules
+  - `crates/models` (crate name: `rura_models`): shared protocol DTOs
+  - `crates/client` (crate name: `rura_client`): Rust client SDK (skeleton for FRB)
+- Server modules (`rura_server`)
+  - Connection lifecycle: `crates/server/src/client/*`
+  - Auth logic: `crates/server/src/auth/*`
+  - Messaging: `crates/server/src/messaging/*`
+  - DB/TLS/IP utils: `crates/server/src/utils/*`
+  - CLI args: `crates/server/src/models/args.rs`
+- Shared models (re-exported from `rura_server`)
+  - `rura_server::models::client_message::*` and `rura_server::messaging::models::*`
 
-See: [ARCHITECTURE.md](ARCHITECTURE.md) for a module-by-module map and flow.
+See: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for a module-by-module map and flow.
 
 ## Development
-- Format: `cargo fmt`
-- Lint: `cargo clippy -- -D warnings`
-- Test: `cargo test`
+- Format: `cargo fmt --all`
+- Lint: `cargo clippy --all-targets --all-features -- -D warnings`
+- Test (server crate): `cd crates/server && cargo test`
 - Toolchain: stable Rust; rusqlite uses the `bundled` feature (no external SQLite needed)
 
 ## Tests & Coverage
 
-- Run all tests
-  - `cargo test`
+- Run all tests (server crate):
+  - `cd crates/server && cargo test`
 
-- Run a specific test target
+- Run specific server tests:
   - Unit tests only: `cargo test --lib`
   - Integration tests only: `cargo test --test integration_tests`
   - End-to-end messaging: `cargo test --test end_to_end_messaging`
-  - Messaging unit tests: `cargo test --test messaging_tests`
-  - AppState unit tests: `cargo test --test app_state_tests`
+  - Messaging tests: `cargo test --test messaging_tests`
+  - AppState tests: `cargo test --test app_state_tests`
 
 - Generate HTML coverage (Linux)
   - Install once: `cargo install cargo-tarpaulin`
@@ -90,14 +101,15 @@ See: [ARCHITECTURE.md](ARCHITECTURE.md) for a module-by-module map and flow.
   - Generate: `cargo llvm-cov --all-features --workspace --html`
   - Open report: `target/llvm-cov/html/index.html`
 
-- CI threshold
-  - GitHub Actions enforces a minimum of 80% coverage.
+- CI coverage
+  - GitHub Actions generates and uploads coverage reports; target ≥80% locally.
 
 ## Configuration
-- CLI: `--port <PORT>` (default 8080). See `src/models/args.rs`.
+- CLI: `--port <PORT>` (default 8080). See `crates/server/src/models/args.rs`.
 - TLS (required): `--tls-cert <PATH>` and `--tls-key <PATH>` (PEM; PKCS#8 or RSA key). The server refuses to start without them.
 
 ## Limitations
+- TLS-only endpoint: plain `telnet`/`nc` cannot connect; use a TLS client (`openssl s_client`) or build a proper client.
 - Delivery occurs only to online users (no offline delivery yet), but messages are persisted in the database with a `saved` flag.
 - No sender acknowledgement or error on unknown recipients (by design for now).
 - Envelope uses a JSON string for `data` to keep parsing stable; consider migrating to structured payloads if you control all clients.
