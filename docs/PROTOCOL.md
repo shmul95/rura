@@ -43,10 +43,15 @@ Client → Server (send)
   - `{"command":"message","data":"{\"to_user_id\":3,\"body\":\"hello world\"}"}`
   - Optional: `saved` boolean to request marking the message as saved
     - `{"command":"message","data":"{\"to_user_id\":3,\"body\":\"hi\",\"saved\":true}"}`
+  - The Flutter client in this repo does not expose a UI toggle for `saved`; messages default to `saved=false`.
 
 Server → Recipient (deliver)
 - Direct message event (inside `data`):
   - `{"command":"message","data":"{\"from_user_id\":1,\"body\":\"hello world\"}"}`
+
+Client stream (Flutter)
+- The desktop client opens a persistent TLS session and listens for incoming lines.
+- It filters for the `message` command and forwards the `data` JSON to Dart via FRB as a stream event.
 
 Acknowledgements & Persistence
 - Minimal implementation: no sender acknowledgement on success, and no explicit error for unknown recipients.
@@ -79,6 +84,13 @@ Error cases (post-auth)
 ## Session Lifecycle
 - Connect → `auth_required` → `login`/`register` → `auth_response(success=true)` → normal messaging.
 - On disconnect: server unregisters the user from the online registry.
+
+## Client SDK mapping (FRB)
+- The Flutter app calls Rust APIs that map to protocol operations:
+  - `login_tls`/`register_tls` → `login`/`register` + read `auth_response`
+  - `login_and_fetch_history_tls`/`register_and_fetch_history_tls` → auth + `history` → `history_response`
+  - `send_direct_message_tls` → auth + `message`
+- All TLS APIs require a CA PEM string to validate the server certificate.
 
 ## Notes and Future Extensions
 - Envelope stability ensures additional commands can be added without breaking parsing.

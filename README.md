@@ -4,12 +4,20 @@ A small asynchronous TCP server written in Rust (Tokio) with:
 - Authentication (register/login) backed by SQLite
 - Direct user-to-user messaging (online delivery only)
 - Simple newline-delimited JSON protocol
+- Desktop Flutter client (WhatsApp-like chat UI) bridged via flutter_rust_bridge
 
 Quick links
 - Protocol: [docs/PROTOCOL.md](docs/PROTOCOL.md)
 - Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - Database & Auth: [docs/DATABASE.md](docs/DATABASE.md)
 - Flutter/FRB Setup: [docs/FRB_SETUP.md](docs/FRB_SETUP.md)
+
+Client quick start
+- Run the desktop Flutter client with FRB bridging: `./scripts/run_client.sh`
+  - The client defaults to reading a CA certificate from `certs/ca.crt` (repo root).
+  - You can change Host/Port/Cert path, passphrase, and password in the UI.
+  - After login/register, you land on a Chats list and can open a chat to send messages.
+  - Live updates: the client opens a persistent TLS stream and updates chats in real time when new messages arrive.
 
 ## Quick Start
 
@@ -19,7 +27,7 @@ Build and run (TLS-only)
 - Start the server (from server crate):
   - `cd crates/server`
   - `cargo run -- --port 8443 --tls-cert server.crt --tls-key server.key`
-  - If your certs are at repo root, use: `cargo run -- --port 8443 --tls-cert ../../server.crt --tls-key ../../server.key`
+  - If using the dev certs in this repo: `cargo run -- --port 8443 --tls-cert ../../certs/server.crt --tls-key ../../certs/server.key`
 
 Connect with TLS (two terminals)
 - Open two TLS clients using OpenSSL:
@@ -33,6 +41,14 @@ Connect with TLS (two terminals)
   - `{"command":"message","data":"{\"to_user_id\":2,\"body\":\"hello world\"}"}`
 - Bob receives:
   - `{"command":"message","data":"{\"from_user_id\":<alice_id>,\"body\":\"hello world\"}"}`
+
+Flutter client (desktop)
+- One-liner: `./scripts/run_client.sh`
+  - Script runs FRB codegen, builds the Rust client library, and launches Flutter.
+  - Default CA path in the UI: `../../../certs/ca.crt` (relative to the Flutter app folder).
+  - Enter passphrase/password; tap Login or Register.
+  - Chats list groups conversations by peer user id; tap to open a chat and send messages.
+  - Note: live incoming messages require a persistent connection and are not yet enabled; use history refresh in future iterations.
 
 Login instead of register (if users already exist)
 - `{"command":"login","data":"{\"passphrase\":\"alice\",\"password\":\"secret\"}"}`
