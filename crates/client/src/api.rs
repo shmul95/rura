@@ -37,15 +37,8 @@ pub struct HistoryMessage {
     pub saved: bool,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
-pub struct ModelHistoryMessage {
-    id: i64,
-    from_user_id: i64,
-    to_user_id: i64,
-    body: String,
-    timestamp: String,
-    saved: bool,
-}
+// Use shared protocol models from rura_models for internal serialization.
+pub type ModelHistoryMessage = rura_models::messaging::HistoryMessage;
 
 impl From<ModelHistoryMessage> for HistoryMessage {
     fn from(src: ModelHistoryMessage) -> Self {
@@ -60,17 +53,8 @@ impl From<ModelHistoryMessage> for HistoryMessage {
     }
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
-pub struct HistoryRequest {
-    pub limit: Option<usize>,
-}
-
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
-pub struct HistoryResponse {
-    pub success: bool,
-    pub message: String,
-    pub messages: Vec<ModelHistoryMessage>,
-}
+pub type HistoryRequest = rura_models::messaging::HistoryRequest;
+pub type HistoryResponse = rura_models::messaging::HistoryResponse;
 
 fn build_root_store_from_pem(pem: &str) -> Result<RootCertStore, String> {
     let mut reader = std::io::Cursor::new(pem.as_bytes());
