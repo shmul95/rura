@@ -5,6 +5,13 @@ import 'package:flutter/material.dart';
 import 'frb/api.dart';
 import 'frb/frb_generated.dart';
 
+// App color palette
+const kPrimary = Color(0xFFF06543);  // f06543
+const kSecondary = Color(0xFF33CCC7); // 33ccc7
+const kTertiary = Color(0xFFF09D51); // f09d51
+const kBackground = Color(0xFFE0DFD5); // e0dfd5
+const kDark = Color(0xFF313638);      // 313638
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await RustLib.init();
@@ -16,9 +23,137 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Light scheme
+    const lightScheme = ColorScheme(
+      brightness: Brightness.light,
+      primary: kPrimary,
+      onPrimary: Colors.white,
+      secondary: kSecondary,
+      onSecondary: Colors.black,
+      tertiary: kTertiary,
+      onTertiary: Colors.black,
+      error: Color(0xFFB00020),
+      onError: Colors.white,
+      background: kBackground,
+      onBackground: kDark,
+      surface: Colors.white,
+      onSurface: kDark,
+    );
+
+    final lightTheme = ThemeData(
+      useMaterial3: true,
+      colorScheme: lightScheme,
+      scaffoldBackgroundColor: lightScheme.background,
+      appBarTheme: const AppBarTheme(
+        backgroundColor: kPrimary,
+        foregroundColor: Colors.white,
+        centerTitle: false,
+      ),
+      elevatedButtonTheme: ElevatedButtonThemeData(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: kPrimary,
+          foregroundColor: Colors.white,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          textStyle: const TextStyle(fontWeight: FontWeight.w600),
+        ),
+      ),
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: OutlinedButton.styleFrom(
+          foregroundColor: kPrimary,
+          side: const BorderSide(color: kPrimary, width: 1.4),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          textStyle: const TextStyle(fontWeight: FontWeight.w600),
+        ),
+      ),
+      inputDecorationTheme: const InputDecorationTheme(
+        filled: true,
+        fillColor: Colors.white,
+        labelStyle: TextStyle(color: kDark),
+        hintStyle: TextStyle(color: Color(0x99313638)),
+        border: OutlineInputBorder(),
+        focusedBorder: OutlineInputBorder(
+          borderSide: BorderSide(color: kPrimary, width: 1.8),
+        ),
+      ),
+      floatingActionButtonTheme: const FloatingActionButtonThemeData(
+        backgroundColor: kSecondary,
+        foregroundColor: Colors.black,
+      ),
+      dividerTheme: DividerThemeData(color: kDark.withOpacity(0.12), thickness: 1),
+      textTheme: const TextTheme().apply(
+        bodyColor: kDark,
+        displayColor: kDark,
+      ),
+    );
+
+    // Dark scheme
+    const darkScheme = ColorScheme(
+      brightness: Brightness.dark,
+      primary: kPrimary,
+      onPrimary: Colors.white,
+      secondary: kSecondary,
+      onSecondary: Colors.black,
+      tertiary: kTertiary,
+      onTertiary: Colors.black,
+      error: Color(0xFFCF6679),
+      onError: Colors.black,
+      background: kDark,
+      onBackground: kBackground,
+      surface: Color(0xFF202325),
+      onSurface: kBackground,
+    );
+
+    final darkTheme = ThemeData(
+      useMaterial3: true,
+      colorScheme: darkScheme,
+      scaffoldBackgroundColor: darkScheme.background,
+      appBarTheme: const AppBarTheme(
+        backgroundColor: kPrimary,
+        foregroundColor: Colors.white,
+        centerTitle: false,
+      ),
+      elevatedButtonTheme: ElevatedButtonThemeData(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: kPrimary,
+          foregroundColor: Colors.white,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          textStyle: const TextStyle(fontWeight: FontWeight.w600),
+        ),
+      ),
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: OutlinedButton.styleFrom(
+          foregroundColor: kSecondary,
+          side: const BorderSide(color: kSecondary, width: 1.4),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          textStyle: const TextStyle(fontWeight: FontWeight.w600),
+        ),
+      ),
+      inputDecorationTheme: const InputDecorationTheme(
+        filled: true,
+        fillColor: Color(0xFF2B2F31),
+        labelStyle: TextStyle(color: kBackground),
+        hintStyle: TextStyle(color: Color(0x99E0DFD5)),
+        border: OutlineInputBorder(),
+        focusedBorder: OutlineInputBorder(
+          borderSide: BorderSide(color: kPrimary, width: 1.8),
+        ),
+      ),
+      floatingActionButtonTheme: const FloatingActionButtonThemeData(
+        backgroundColor: kSecondary,
+        foregroundColor: Colors.black,
+      ),
+      dividerTheme: DividerThemeData(color: kBackground.withOpacity(0.12), thickness: 1),
+      textTheme: const TextTheme().apply(
+        bodyColor: kBackground,
+        displayColor: kBackground,
+      ),
+    );
+
     return MaterialApp(
       title: 'Rura Client',
-      theme: ThemeData(colorSchemeSeed: Colors.blue, useMaterial3: true),
+      theme: lightTheme,
+      darkTheme: darkTheme,
+      themeMode: ThemeMode.system,
       home: const HomePage(),
     );
   }
@@ -135,7 +270,7 @@ class _HomePageState extends State<HomePage> {
               ],
             ),
             const SizedBox(height: 16),
-            Text(_status),
+            Text(_status, style: Theme.of(context).textTheme.bodyMedium),
           ],
         ),
       ),
@@ -262,7 +397,11 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
           final msgs = items[index].value;
           final last = msgs.last;
           return ListTile(
-            leading: CircleAvatar(child: Text('${peerId % 100}')),
+            leading: const CircleAvatar(
+              backgroundColor: kSecondary,
+              foregroundColor: Colors.black,
+              child: Icon(Icons.person),
+            ),
             title: Text('User $peerId'),
             subtitle: Text(last.body, maxLines: 1, overflow: TextOverflow.ellipsis),
             trailing: Text(_formatTime(last.timestamp), style: Theme.of(context).textTheme.bodySmall),
@@ -404,17 +543,25 @@ class _ChatPageState extends State<ChatPage> {
                     padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
                     constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.7),
                     decoration: BoxDecoration(
-                      color: fromSelf ? Colors.blue.shade200 : Colors.grey.shade300,
+                      color: fromSelf ? kPrimary : kSecondary,
                       borderRadius: BorderRadius.circular(12),
                     ),
                     child: Column(
                       crossAxisAlignment: fromSelf ? CrossAxisAlignment.end : CrossAxisAlignment.start,
                       children: [
-                        Text(m.body),
+                        Text(
+                          m.body,
+                          style: TextStyle(
+                            color: fromSelf ? Colors.white : Colors.black,
+                          ),
+                        ),
                         const SizedBox(height: 4),
                         Text(
                           _formatTime(m.timestamp),
-                          style: Theme.of(context).textTheme.bodySmall,
+                          style: Theme.of(context)
+                              .textTheme
+                              .bodySmall
+                              ?.copyWith(color: fromSelf ? Colors.white70 : const Color(0xCC000000)),
                         ),
                       ],
                     ),
