@@ -6,29 +6,8 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `auth_over_stream`, `build_root_store_from_pem`, `cache_base_dir`, `chat_file`, `chats_dir`, `ensure_dir`, `fetch_history_over_stream`, `list_chat_files`, `make_tls_stream`, `read_chat`, `read_line`, `user_dir`, `write_chat`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `LocalMsg`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`
-
-Future<void> appendLocalMessage({
-  required PlatformInt64 userId,
-  required PlatformInt64 fromUserId,
-  required PlatformInt64 toUserId,
-  required String body,
-  required String timestamp,
-}) => RustLib.instance.api.crateApiAppendLocalMessage(
-  userId: userId,
-  fromUserId: fromUserId,
-  toUserId: toUserId,
-  body: body,
-  timestamp: timestamp,
-);
-
-Future<List<HistoryMessage>> loadLocalHistory({
-  required PlatformInt64 userId,
-  BigInt? limit,
-}) =>
-    RustLib.instance.api.crateApiLoadLocalHistory(userId: userId, limit: limit);
+// These functions are ignored because they are not marked as `pub`: `auth_over_stream`, `build_root_store_from_pem`, `fetch_history_over_stream`, `make_tls_stream`, `read_line`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`, `from`
 
 /// Login to the TLS-only server and return the auth response.
 ///
@@ -113,32 +92,6 @@ Future<void> sendDirectMessageOverStream({
   saved: saved,
 );
 
-/// Publish a public key for the authenticated user via an existing stream session.
-Future<void> setPubkeyOverStream({
-  required PlatformInt64 userId,
-  required String pubkey,
-}) => RustLib.instance.api.crateApiSetPubkeyOverStream(
-  userId: userId,
-  pubkey: pubkey,
-);
-
-/// One-off helper: login and fetch another user's published public key.
-Future<String?> getPubkeyTls({
-  required String host,
-  required int port,
-  required String caPem,
-  required String passphrase,
-  required String password,
-  required PlatformInt64 userId,
-}) => RustLib.instance.api.crateApiGetPubkeyTls(
-  host: host,
-  port: port,
-  caPem: caPem,
-  passphrase: passphrase,
-  password: password,
-  userId: userId,
-);
-
 /// Login and fetch message history in one TLS session.
 Future<HistoryBundle> loginAndFetchHistoryTls({
   required String host,
@@ -148,40 +101,6 @@ Future<HistoryBundle> loginAndFetchHistoryTls({
   required String password,
   BigInt? limit,
 }) => RustLib.instance.api.crateApiLoginAndFetchHistoryTls(
-  host: host,
-  port: port,
-  caPem: caPem,
-  passphrase: passphrase,
-  password: password,
-  limit: limit,
-);
-
-/// Login and load local cache history (no server history).
-Future<HistoryBundle> loginAndLoadLocalHistoryTls({
-  required String host,
-  required int port,
-  required String caPem,
-  required String passphrase,
-  required String password,
-  BigInt? limit,
-}) => RustLib.instance.api.crateApiLoginAndLoadLocalHistoryTls(
-  host: host,
-  port: port,
-  caPem: caPem,
-  passphrase: passphrase,
-  password: password,
-  limit: limit,
-);
-
-/// Register and load local cache history (no server history).
-Future<HistoryBundle> registerAndLoadLocalHistoryTls({
-  required String host,
-  required int port,
-  required String caPem,
-  required String passphrase,
-  required String password,
-  BigInt? limit,
-}) => RustLib.instance.api.crateApiRegisterAndLoadLocalHistoryTls(
   host: host,
   port: port,
   caPem: caPem,

@@ -12,9 +12,6 @@ const kTertiary = Color(0xFFF09D51); // f09d51
 const kBackground = Color(0xFFE0DFD5); // e0dfd5
 const kDark = Color(0xFF313638);      // 313638
 
-// Compile-time flag passed via `flutter run --dart-define=REQUIRE_E2EE=true`
-const bool kRequireE2EE = bool.fromEnvironment('REQUIRE_E2EE', defaultValue: true);
-
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await RustLib.init();
@@ -201,21 +198,21 @@ class _HomePageState extends State<HomePage> {
       final pwd = _password.text;
 
       final bundle = register
-          ? await registerAndLoadLocalHistoryTls(
+          ? await registerAndFetchHistoryTls(
               host: host,
               port: port,
               caPem: caPem,
               passphrase: pass,
               password: pwd,
-              limit: BigInt.from(500),
+              limit: BigInt.from(200),
             )
-          : await loginAndLoadLocalHistoryTls(
+          : await loginAndFetchHistoryTls(
               host: host,
               port: port,
               caPem: caPem,
               passphrase: pass,
               password: pwd,
-              limit: BigInt.from(500),
+              limit: BigInt.from(200),
             );
 
       if (!bundle.success) {
@@ -250,14 +247,6 @@ class _HomePageState extends State<HomePage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (kRequireE2EE)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Text(
-                  'E2EE enforced: messages must be opaque envelopes',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ),
             TextField(controller: _host, decoration: const InputDecoration(labelText: 'Host')),
             TextField(controller: _port, decoration: const InputDecoration(labelText: 'Port')),
             TextField(controller: _certPath, decoration: const InputDecoration(labelText: 'Cert PEM path')),
@@ -358,27 +347,17 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
       passphrase: s.passphrase,
       password: s.password,
     );
-    _sub = stream.listen((data) async {
+    _sub = stream.listen((data) {
       try {
         final map = jsonDecode(data) as Map;
         final from = map['from_user_id'] as int;
-        final bodyRaw = map['body'] as String;
-        final body = _decodeEnvelope(bodyRaw);
-        final now = DateTime.now().toIso8601String();
-        // Persist to local cache
-        await appendLocalMessage(
-          userId: _selfId,
-          fromUserId: from,
-          toUserId: _selfId,
-          body: body,
-          timestamp: now,
-        );
+        final body = map['body'] as String;
         final msg = HistoryMessage(
           id: 0,
           fromUserId: from,
           toUserId: _selfId,
           body: body,
-          timestamp: now,
+          timestamp: DateTime.now().toIso8601String(),
           saved: false,
         );
         _incoming.add(msg);
@@ -506,33 +485,13 @@ class _ChatPageState extends State<ChatPage> {
     if (text.isEmpty) return;
     setState(() => _sending = true);
     try {
-      // If the user typed plaintext, wrap it into a v1 envelope so the server
-      // accepts it under E2EE enforcement. NOTE: This is a transport wrapper
-      // only and NOT real encryption. See docs/E2EE.md to implement real crypto.
-      String body = text;
-      if (!text.startsWith('v1:')) {
-        final b64 = base64.encode(utf8.encode(text));
-        // static placeholders for ephemeral pub and nonce (dev only)
-        const eph = 'UGxhaW5FcGg='; // "PlainEph"
-        const nonce = 'Tm9uY2U=';    // "Nonce"
-        body = 'v1:$eph:$nonce:$b64';
-      }
-
       await sendDirectMessageOverStream(
         userId: widget.selfUserId,
         toUserId: widget.peerUserId,
-        body: body,
+        body: text,
         saved: false,
       );
       final now = DateTime.now().toIso8601String();
-      // Persist to local cache (sender side) as plaintext
-      await appendLocalMessage(
-        userId: widget.selfUserId,
-        fromUserId: widget.selfUserId,
-        toUserId: widget.peerUserId,
-        body: text,
-        timestamp: now,
-      );
       setState(() {
         _messages.add(HistoryMessage(
           id: 0,
@@ -547,13 +506,6 @@ class _ChatPageState extends State<ChatPage> {
       await Future.delayed(const Duration(milliseconds: 50));
       if (_scroll.hasClients) {
         _scroll.jumpTo(_scroll.position.maxScrollExtent + 80);
-      }
-    } catch (e) {
-      // Show a friendly error (e.g., when E2EE is enforced and body is not an envelope)
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Send failed: $e')),
-        );
       }
     } finally {
       if (mounted) setState(() => _sending = false);
@@ -663,18 +615,4 @@ String _formatTime(String iso) {
     return '${_two(dt.hour)}:${_two(dt.minute)}';
   }
   return '${dt.year}-${_two(dt.month)}-${_two(dt.day)}';
-}
-
-String _decodeEnvelope(String body) {
-  if (body.startsWith('v1:')) {
-    final parts = body.split(':');
-    if (parts.length == 4) {
-      try {
-        return utf8.decode(base64.decode(parts[3]));
-      } catch (_) {
-        return body;
-      }
-    }
-  }
-  return body;
 }

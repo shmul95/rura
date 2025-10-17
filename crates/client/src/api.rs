@@ -12,11 +12,8 @@ pub type ClientMessage = rura_models::client_message::ClientMessage;
 // NOTE: Keep client-local history/message structs to avoid tight coupling to rura_models.
 use rustls::pki_types::{CertificateDer, ServerName};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
-use serde::{Deserialize, Serialize};
-use std::fs;
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
-use std::path::{Path, PathBuf};
 use std::sync::{Arc, Once};
 
 /// Simple Dart-friendly login response.
@@ -58,132 +55,6 @@ impl From<ModelHistoryMessage> for HistoryMessage {
 
 pub type HistoryRequest = rura_models::messaging::HistoryRequest;
 pub type HistoryResponse = rura_models::messaging::HistoryResponse;
-
-// ---------- Local cache helpers ----------
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct LocalMsg {
-    id: i64,
-    from_user_id: i64,
-    to_user_id: i64,
-    body: String,
-    timestamp: String,
-    saved: bool,
-}
-
-fn cache_base_dir() -> PathBuf {
-    if let Ok(custom) = std::env::var("RURA_CLIENT_CACHE_DIR") {
-        return PathBuf::from(custom);
-    }
-    // Default: inside client crate (parent of flutter_app)
-    std::env::current_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join("../.cache")
-}
-
-fn ensure_dir(path: &Path) -> Result<(), String> {
-    fs::create_dir_all(path).map_err(|e| format!("Failed to create dir {}: {e}", path.display()))
-}
-
-fn user_dir(user_id: i64) -> PathBuf {
-    cache_base_dir().join("users").join(user_id.to_string())
-}
-fn chats_dir(user_id: i64) -> PathBuf {
-    user_dir(user_id).join("chats")
-}
-fn chat_file(user_id: i64, peer_id: i64) -> PathBuf {
-    chats_dir(user_id).join(format!("{peer_id}.json"))
-}
-
-fn read_chat(user_id: i64, peer_id: i64) -> Result<Vec<LocalMsg>, String> {
-    let path = chat_file(user_id, peer_id);
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let data =
-        fs::read_to_string(&path).map_err(|e| format!("Read {} failed: {e}", path.display()))?;
-    let v: Vec<LocalMsg> =
-        serde_json::from_str(&data).map_err(|e| format!("Parse {} failed: {e}", path.display()))?;
-    Ok(v)
-}
-
-fn write_chat(user_id: i64, peer_id: i64, msgs: &[LocalMsg]) -> Result<(), String> {
-    let dir = chats_dir(user_id);
-    ensure_dir(&dir)?;
-    let path = chat_file(user_id, peer_id);
-    let data = serde_json::to_string_pretty(msgs).map_err(|e| format!("Serialize failed: {e}"))?;
-    fs::write(&path, data).map_err(|e| format!("Write {} failed: {e}", path.display()))
-}
-
-fn list_chat_files(user_id: i64) -> Vec<PathBuf> {
-    let dir = chats_dir(user_id);
-    match fs::read_dir(dir) {
-        Ok(rd) => rd.filter_map(|e| e.ok()).map(|e| e.path()).collect(),
-        Err(_) => Vec::new(),
-    }
-}
-
-#[frb]
-pub fn append_local_message(
-    user_id: i64,
-    from_user_id: i64,
-    to_user_id: i64,
-    body: String,
-    timestamp: String,
-) -> Result<(), String> {
-    let peer = if from_user_id == user_id {
-        to_user_id
-    } else {
-        from_user_id
-    };
-    let mut msgs = read_chat(user_id, peer)?;
-    let next_id = msgs.last().map(|m| m.id + 1).unwrap_or(1);
-    msgs.push(LocalMsg {
-        id: next_id,
-        from_user_id,
-        to_user_id,
-        body,
-        timestamp,
-        saved: false,
-    });
-    write_chat(user_id, peer, &msgs)
-}
-
-#[frb]
-pub fn load_local_history(
-    user_id: i64,
-    limit: Option<usize>,
-) -> Result<Vec<HistoryMessage>, String> {
-    let mut all: Vec<LocalMsg> = Vec::new();
-    for path in list_chat_files(user_id) {
-        if let Some(_stem) = path.file_stem().and_then(|s| s.to_str()) {
-            match fs::read_to_string(&path) {
-                Ok(data) => match serde_json::from_str::<Vec<LocalMsg>>(&data) {
-                    Ok(mut v) => all.append(&mut v),
-                    Err(_) => {}
-                },
-                Err(_) => {}
-            }
-        }
-    }
-    // Sort by (timestamp, id)
-    all.sort_by(|a, b| a.timestamp.cmp(&b.timestamp).then_with(|| a.id.cmp(&b.id)));
-    let lim = limit.unwrap_or(usize::MAX);
-    let out = all.into_iter().rev().take(lim).collect::<Vec<_>>();
-    let mut mapped: Vec<HistoryMessage> = out
-        .into_iter()
-        .rev()
-        .map(|m| HistoryMessage {
-            id: m.id,
-            from_user_id: m.from_user_id,
-            to_user_id: m.to_user_id,
-            body: m.body,
-            timestamp: m.timestamp,
-            saved: m.saved,
-        })
-        .collect();
-    Ok(mapped)
-}
 
 fn build_root_store_from_pem(pem: &str) -> Result<RootCertStore, String> {
     let mut reader = std::io::Cursor::new(pem.as_bytes());
@@ -433,32 +304,6 @@ pub fn send_direct_message_tls(
     body: String,
     saved: Option<bool>,
 ) -> Result<SendResult, String> {
-    fn is_base64ish(s: &str) -> bool {
-        !s.is_empty()
-            && s.chars().all(|c| {
-                matches!(
-                    c,
-                    'A'..='Z' | 'a'..='z' | '0'..='9' | '+' | '/' | '=' | '-' | '_'
-                )
-            })
-    }
-    fn is_e2ee_envelope(body: &str) -> bool {
-        if !body.starts_with("v1:") {
-            return false;
-        }
-        let parts: Vec<&str> = body.split(':').collect();
-        if parts.len() != 4 {
-            return false;
-        }
-        let (_v, eph, nonce, ct) = (parts[0], parts[1], parts[2], parts[3]);
-        is_base64ish(eph) && is_base64ish(nonce) && is_base64ish(ct)
-    }
-    if !is_e2ee_envelope(&body) {
-        return Ok(SendResult {
-            success: false,
-            message: "E2EE required: body must be an opaque v1 envelope".to_string(),
-        });
-    }
     let mut tls = make_tls_stream(&host, port, &ca_pem)?;
     let login = auth_over_stream(&mut tls, "login", passphrase, password)?;
     if !login.success {
@@ -591,29 +436,6 @@ pub fn send_direct_message_over_stream(
     body: String,
     saved: Option<bool>,
 ) -> Result<(), String> {
-    fn is_base64ish(s: &str) -> bool {
-        !s.is_empty()
-            && s.chars().all(|c| {
-                matches!(
-                    c,
-                    'A'..='Z' | 'a'..='z' | '0'..='9' | '+' | '/' | '=' | '-' | '_'
-                )
-            })
-    }
-    fn is_e2ee_envelope(body: &str) -> bool {
-        if !body.starts_with("v1:") {
-            return false;
-        }
-        let parts: Vec<&str> = body.split(':').collect();
-        if parts.len() != 4 {
-            return false;
-        }
-        let (_v, eph, nonce, ct) = (parts[0], parts[1], parts[2], parts[3]);
-        is_base64ish(eph) && is_base64ish(nonce) && is_base64ish(ct)
-    }
-    if !is_e2ee_envelope(&body) {
-        return Err("E2EE required: body must be an opaque v1 envelope".to_string());
-    }
     let tx = {
         let g = SESSIONS.lock().unwrap();
         g.get(&user_id).cloned()
@@ -640,89 +462,6 @@ pub fn send_direct_message_over_stream(
     line.push('\n');
     tx.send(line)
         .map_err(|_| "Failed to enqueue send".to_string())
-}
-
-/// Publish a public key for the authenticated user via an existing stream session.
-#[frb]
-pub fn set_pubkey_over_stream(user_id: i64, pubkey: String) -> Result<(), String> {
-    let tx = {
-        let g = SESSIONS.lock().unwrap();
-        g.get(&user_id).cloned()
-    };
-    let Some(tx) = tx else {
-        return Err("No active stream session for user".to_string());
-    };
-    #[derive(serde::Serialize)]
-    struct SetPkReq {
-        pubkey: String,
-    }
-    let req = SetPkReq { pubkey };
-    let env = ClientMessage {
-        command: "set_pubkey".to_string(),
-        data: serde_json::to_string(&req).map_err(|e| format!("Serialize error: {e}"))?,
-    };
-    let mut line = serde_json::to_string(&env).map_err(|e| format!("Serialize error: {e}"))?;
-    line.push('\n');
-    tx.send(line)
-        .map_err(|_| "Failed to enqueue set_pubkey".to_string())
-}
-
-/// One-off helper: login and fetch another user's published public key.
-#[frb]
-pub fn get_pubkey_tls(
-    host: String,
-    port: u16,
-    ca_pem: String,
-    passphrase: String,
-    password: String,
-    user_id: i64,
-) -> Result<Option<String>, String> {
-    let mut tls = make_tls_stream(&host, port, &ca_pem)?;
-    let login = auth_over_stream(&mut tls, "login", passphrase, password)?;
-    if !login.success {
-        tls.conn.send_close_notify();
-        let _ = tls.flush();
-        return Err(login.message);
-    }
-    #[derive(serde::Serialize)]
-    struct GetPkReq {
-        user_id: i64,
-    }
-    #[derive(serde::Deserialize)]
-    struct GetPkResp {
-        success: bool,
-        message: String,
-        user_id: Option<i64>,
-        pubkey: Option<String>,
-    }
-
-    let req = GetPkReq { user_id };
-    let env = ClientMessage {
-        command: "get_pubkey".to_string(),
-        data: serde_json::to_string(&req).map_err(|e| format!("Serialize error: {e}"))?,
-    };
-    let mut line = serde_json::to_string(&env).map_err(|e| format!("Serialize error: {e}"))?;
-    line.push('\n');
-    tls.write_all(line.as_bytes())
-        .map_err(|e| format!("Write failed: {e}"))?;
-    tls.flush().map_err(|e| format!("Flush failed: {e}"))?;
-
-    let raw = read_line(&mut tls).map_err(|e| format!("Read failed: {e}"))?;
-    let wrapper: ClientMessage = serde_json::from_str(&raw)
-        .map_err(|e| format!("Invalid JSON from server: {e}; raw={raw}"))?;
-    if wrapper.command != "get_pubkey_response" {
-        return Err(format!("Unexpected command: {}", wrapper.command));
-    }
-    let resp: GetPkResp = serde_json::from_str(&wrapper.data)
-        .map_err(|e| format!("Invalid get_pubkey_response data: {e}"))?;
-
-    tls.conn.send_close_notify();
-    let _ = tls.flush();
-    if resp.success {
-        Ok(resp.pubkey)
-    } else {
-        Ok(None)
-    }
 }
 
 fn make_tls_stream(
@@ -805,64 +544,6 @@ pub fn login_and_fetch_history_tls(
         success: login.success,
         message: login.message,
         user_id: login.user_id,
-        messages,
-    })
-}
-
-/// Login and load local cache history (no server history).
-#[frb]
-#[allow(clippy::too_many_arguments)]
-pub fn login_and_load_local_history_tls(
-    host: String,
-    port: u16,
-    ca_pem: String,
-    passphrase: String,
-    password: String,
-    limit: Option<usize>,
-) -> Result<HistoryBundle, String> {
-    let mut tls = make_tls_stream(&host, port, &ca_pem)?;
-    let login = auth_over_stream(&mut tls, "login", passphrase, password)?;
-    tls.conn.send_close_notify();
-    let _ = tls.flush();
-    let mut messages = Vec::new();
-    if login.success {
-        if let Some(uid) = login.user_id {
-            messages = load_local_history(uid, limit)?;
-        }
-    }
-    Ok(HistoryBundle {
-        success: login.success,
-        message: login.message,
-        user_id: login.user_id,
-        messages,
-    })
-}
-
-/// Register and load local cache history (no server history).
-#[frb]
-#[allow(clippy::too_many_arguments)]
-pub fn register_and_load_local_history_tls(
-    host: String,
-    port: u16,
-    ca_pem: String,
-    passphrase: String,
-    password: String,
-    limit: Option<usize>,
-) -> Result<HistoryBundle, String> {
-    let mut tls = make_tls_stream(&host, port, &ca_pem)?;
-    let reg = auth_over_stream(&mut tls, "register", passphrase, password)?;
-    tls.conn.send_close_notify();
-    let _ = tls.flush();
-    let mut messages = Vec::new();
-    if reg.success {
-        if let Some(uid) = reg.user_id {
-            messages = load_local_history(uid, limit)?;
-        }
-    }
-    Ok(HistoryBundle {
-        success: reg.success,
-        message: reg.message,
-        user_id: reg.user_id,
         messages,
     })
 }

@@ -69,12 +69,6 @@ Docs: [PROTOCOL.md](PROTOCOL.md) and [DATABASE.md](DATABASE.md) remain valid and
   - `models` (CLI args + re-exports of shared models)
   - `utils` (TLS, DB, IP helpers)
 
-### E2EE keys
-- The server acts as a simple public key directory to help clients establish E2EE:
-  - `users.pubkey` column stores a user’s latest published public key (if any).
-  - Authed commands: `set_pubkey` (store own pubkey), `get_pubkey` (fetch another user’s pubkey).
-  - The server never stores private keys and never sees plaintext message content.
-
 ## Shared Models (crate `rura_models`)
 - `client_message`:
   - `ClientMessage { command, data }`
