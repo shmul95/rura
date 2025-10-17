@@ -7,3 +7,4 @@ server.crt
 server.key
 crates/client/target
 certs
+.cache
