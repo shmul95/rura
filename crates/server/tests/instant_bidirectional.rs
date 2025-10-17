@@ -124,24 +124,28 @@ async fn instant_bidirectional_delivery() {
     assert!(resp2.success);
     let bob = resp2.user_id.unwrap();
 
-    // A -> B instant
+    // A -> B instant (opaque envelope)
     write_json(
         &mut a,
         &ClientMessage {
             command: "message".into(),
-            data: format!("{{\"to_user_id\":{bob},\"body\":\"hi bob\"}}"),
+            data: format!(
+                "{{\"to_user_id\":{bob},\"body\":\"v1:RU5WUEs=:Tk9OQ0U=:Q0lQSEVSVEVYVA==\"}}"
+            ),
         },
     )
     .await;
     let delivered_to_b = read_msg(&mut b).await;
     assert_eq!(delivered_to_b.command, "message");
 
-    // B -> A instant
+    // B -> A instant (opaque envelope)
     write_json(
         &mut b,
         &ClientMessage {
             command: "message".into(),
-            data: format!("{{\"to_user_id\":{alice},\"body\":\"hi alice\"}}"),
+            data: format!(
+                "{{\"to_user_id\":{alice},\"body\":\"v1:RU5WUEs=:Tk9OQ0U=:Q0lQSEVSVEVYVA==\"}}"
+            ),
         },
     )
     .await;
