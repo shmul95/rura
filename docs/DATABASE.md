@@ -15,8 +15,16 @@ See also:
 - `passphrase` TEXT UNIQUE: human-readable handle chosen by the user
 - `password` TEXT: Argon2 hash encoded in PHC format (algorithm, parameters, salt)
 
-### (removed) `messages`
-Messages are no longer persisted on the server. Each client stores plaintext locally (see docs/E2EE.md for details). Existing databases may still contain an old `messages` table; it is unused.
+### `messages`
+- `id` INTEGER PRIMARY KEY AUTOINCREMENT
+- `sender` / `receiver` INTEGER: foreign keys to `users.id`
+- `content` TEXT: arbitrary JSON payload
+- `timestamp` TEXT: ISO 8601 timestamp
+- `saved` INTEGER (0/1): whether the message is marked to keep beyond the transient window
+
+Notes:
+- Existing databases created before this change are auto-migrated to add the `saved` column on startup.
+- The server persists each direct message on send; delivery to offline users is not yet implemented.
 
 ### `connections`
 - `id` INTEGER PRIMARY KEY AUTOINCREMENT

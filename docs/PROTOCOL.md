@@ -36,54 +36,42 @@ Error cases (auth phase)
 
 State
 - After successful auth, the server tracks the connection’s `user_id`.
-- Messages are delivered to online recipients; the server does not persist messages; clients store them locally.
+- Messages are delivered to online recipients; all messages are persisted.
 
 Client → Server (send)
 - Direct message request (inside `data`):
-  - Plaintext example (legacy/testing):
-    - `{"command":"message","data":"{\"to_user_id\":3,\"body\":\"hello world\"}"}`
-  - E2EE recommended: treat `body` as opaque ciphertext (base64), containing an application-defined envelope. One suggested format:
-    - `v1:<b64_ephemeral_pub>:<b64_nonce>:<b64_ciphertext>`
-    - Where ciphertext is an AEAD over the cleartext payload; the server does not parse it.
-  - Optional: `saved` boolean to mark the message as retained on the server (retention hint only; not application semantics)
-    - `{"command":"message","data":"{\"to_user_id\":3,\"body\":\"v1:...\",\"saved\":true}"}`
+  - `{"command":"message","data":"{\"to_user_id\":3,\"body\":\"hello world\"}"}`
+  - Optional: `saved` boolean to request marking the message as saved
+    - `{"command":"message","data":"{\"to_user_id\":3,\"body\":\"hi\",\"saved\":true}"}`
+  - The Flutter client in this repo does not expose a UI toggle for `saved`; messages default to `saved=false`.
 
 Server → Recipient (deliver)
 - Direct message event (inside `data`):
-  - `{"command":"message","data":"{\"from_user_id\":1,\"body\":\"<opaque>\"}"}`
-  - The `body` is not inspected or modified by the server.
-
-### Enforcing E2EE
-- E2EE is enforced by default. Messages whose `body` is not a `v1:<b64>:<b64>:<b64>` envelope are rejected with `{"command":"error","data":"E2EE required: invalid or missing envelope"}` and are not persisted or delivered.
-- The client SDK also rejects non-envelope bodies (see FRB functions `send_direct_message_tls` and `send_direct_message_over_stream`).
+  - `{"command":"message","data":"{\"from_user_id\":1,\"body\":\"hello world\"}"}`
 
 Client stream (Flutter)
 - The desktop client opens a persistent TLS session and listens for incoming lines.
-- It filters for the `message` command, decrypts locally, and stores the plaintext in the client’s local cache.
+- It filters for the `message` command and forwards the `data` JSON to Dart via FRB as a stream event.
 
 Acknowledgements & Persistence
 - Minimal implementation: no sender acknowledgement on success, and no explicit error for unknown recipients.
-- Unknown recipient (offline/unknown `to_user_id`): delivery is skipped. No server persistence is performed.
+- Unknown recipient (offline/unknown `to_user_id`): delivery is skipped, but the message is still persisted.
+- All direct messages are persisted with an ISO 8601 `timestamp`. A `saved` flag is stored (default false).
 
 ## Save Command
-Removed. The server does not support saving messages; clients manage their own local storage.
 
-## E2EE Key Distribution
+Clients can mark/unmark a message as saved.
 
-To enable end-to-end encryption without server access to plaintext, clients should exchange or publish public keys. The server provides a simple key directory for convenience; it only stores public keys.
-
-Client → Server (set own pubkey)
-- `{"command":"set_pubkey","data":"{\"pubkey\":\"<base64-public-key>\"}"}`
+Client → Server
+- `{"command":"save","data":"{\"message_id\":123,\"saved\":true}"}`
+  - `saved` defaults to true if omitted.
 
 Server → Client
-- `{"command":"set_pubkey_response","data":"{\"success\":true,\"message\":\"Pubkey stored\"}"}`
-
-Client → Server (fetch another user's pubkey)
-- `{"command":"get_pubkey","data":"{\"user_id\":123}"}`
-
-Server → Client
-- `{"command":"get_pubkey_response","data":"{\"success\":true,\"message\":\"OK\",\"user_id\":123,\"pubkey\":\"<base64-public-key>\"}"}`
-- When unavailable: `success:false` and `pubkey:null` with a message.
+- `{"command":"save_response","data":"{\"success\":true,\"message\":\"Message updated\",\"message_id\":123,\"saved\":true}"}`
+- On failure (message not found or not owned by the caller):
+  - `{"command":"save_response","data":"{\"success\":false,\"message\":\"Message not found or not authorized\",\"message_id\":123,\"saved\":true}"}`
+- Invalid request format:
+  - `{"command":"error","data":"Invalid save format"}`
 
 Error cases (post-auth)
 - Malformed `message` request (invalid `data` JSON):
