@@ -120,11 +120,11 @@ async fn test_full_auth_and_dm_persistence_and_save() {
     assert!(resp2.success);
     let uid2 = resp2.user_id.unwrap();
 
-    // Send a message from c1 -> c2 with saved=true (opaque envelope)
+    // Send a message from c1 -> c2 with saved=true
     let dm_req = ClientMessage {
         command: "message".into(),
         data: format!(
-            "{{\"to_user_id\":{},\"body\":\"v1:RU5WUEs=:Tk9OQ0U=:Q0lQSEVSVEVYVA==\",\"saved\":true}}",
+            "{{\"to_user_id\":{},\"body\":\"hello world\",\"saved\":true}}",
             uid2
         ),
     };
@@ -134,6 +134,43 @@ async fn test_full_auth_and_dm_persistence_and_save() {
     let delivered = read_msg(&mut c2).await;
     assert_eq!(delivered.command, "message");
 
-    // No server-side persistence anymore; only delivery is asserted.
-    let _ = uid1; // silence
+    // Verify persisted message count and saved flag
+    let (count, saved): (i64, i64) = {
+        let guard = db.lock().unwrap();
+        let c: i64 = guard
+            .query_row("SELECT COUNT(*) FROM messages", [], |row| row.get(0))
+            .unwrap();
+        let s: i64 = guard
+            .query_row(
+                "SELECT saved FROM messages ORDER BY id DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        (c, s)
+    };
+    assert!(count >= 1);
+    assert_eq!(saved, 1);
+
+    // Now flip saved=false via c2 (receiver is authorized)
+    let save_cmd = ClientMessage {
+        command: "save".into(),
+        data: "{\"message_id\":1,\"saved\":false}".into(),
+    };
+    write_json(&mut c2, &save_cmd).await;
+    let save_resp = read_msg(&mut c2).await;
+    assert_eq!(save_resp.command, "save_response");
+
+    let new_saved: i64 = {
+        let guard = db.lock().unwrap();
+        guard
+            .query_row("SELECT saved FROM messages WHERE id = 1", [], |row| {
+                row.get(0)
+            })
+            .unwrap()
+    };
+    assert_eq!(new_saved, 0);
+
+    // Silence warnings
+    let _ = uid1;
 }
