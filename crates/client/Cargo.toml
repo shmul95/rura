@@ -15,9 +15,5 @@ rustls = { version = "0.23", default-features = false, features = ["std", "ring"
 rustls-pemfile = "2.0"
 once_cell = "1"
 
-[dev-dependencies]
-tokio = { version = "1.47", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util"] }
-rcgen = "0.12"
-tempfile = "3"
-rusqlite = { version = "0.37.0", features = ["bundled"] }
-rura_server = { path = "../server" }
+#[dev-dependencies]
+# No cross-crate dev-deps: client crate is independent of server.
