@@ -23,8 +23,8 @@ async fn main() -> tokio::io::Result<()> {
     // Initialize SQLite database
     let conn = Arc::new(Mutex::new(init_db().expect("Failed to init the db")));
 
-    // Initialize shared in-memory state (online users)
-    let state = Arc::new(AppState::default());
+    // Initialize shared in-memory state (online users). E2EE is enforced by default.
+    let state = Arc::new(AppState::new(true));
 
     // Build TLS acceptor (TLS-only server)
     let tls_acceptor: TlsAcceptor = make_tls_acceptor(&args.tls_cert, &args.tls_key)

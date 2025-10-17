@@ -61,4 +61,3 @@ echo "[run_server] Building server (release)"
 pushd "$SERVER_DIR" >/dev/null
 cargo run --release -- --port "$PORT" --tls-cert "$CERT" --tls-key "$KEY"
 popd >/dev/null
-
