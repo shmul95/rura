@@ -1,6 +1,7 @@
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
 use crate::models::client_message::{AuthResponse, ClientMessage};
+use crate::utils::debug::debug_io_enabled;
 
 pub async fn send_auth_success_response<W>(
     stream: &mut W,
@@ -20,6 +21,9 @@ where
         .unwrap(),
     };
     let response_str = serde_json::to_string(&response)? + "\n";
+    if debug_io_enabled() {
+        println!(">>> [auth] {}", response_str.trim_end());
+    }
     stream.write_all(response_str.as_bytes()).await?;
     stream.flush().await
 }
@@ -38,6 +42,9 @@ where
         .unwrap(),
     };
     let response_str = serde_json::to_string(&response)? + "\n";
+    if debug_io_enabled() {
+        println!(">>> [auth] {}", response_str.trim_end());
+    }
     stream.write_all(response_str.as_bytes()).await?;
     stream.flush().await
 }

@@ -30,6 +30,10 @@ Build and run (TLS-only)
   - `cd crates/server`
   - `cargo run -- --port 8443 --tls-cert server.crt --tls-key server.key`
   - If using the dev certs in this repo: `cargo run -- --port 8443 --tls-cert ../../certs/server.crt --tls-key ../../certs/server.key`
+  - With raw I/O debug logging: add `--debug-io`
+
+Or use the helper script
+- `./scripts/run_server.sh --port 8443 [--cert certs/server.crt --key certs/server.key] [--debug-io]`
 
 Connect with TLS (two terminals)
 - Open two TLS clients using OpenSSL:
@@ -130,6 +134,7 @@ See: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for a module-by-module map and
 ## Configuration
 - CLI: `--port <PORT>` (default 8080). See `crates/server/src/models/args.rs`.
 - TLS (required): `--tls-cert <PATH>` and `--tls-key <PATH>` (PEM; PKCS#8 or RSA key). The server refuses to start without them.
+- Debug I/O logging: pass `--debug-io` to log raw inbound/outbound JSON lines per connection.
 
 ## Limitations
 - TLS-only endpoint: plain `telnet`/`nc` cannot connect; use a TLS client (`openssl s_client`) or build a proper client.

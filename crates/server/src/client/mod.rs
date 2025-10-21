@@ -6,6 +6,7 @@ use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use crate::messaging::state::AppState;
 use crate::models::client_message::ClientMessage;
 use crate::utils::db_utils::log_client_connection;
+use crate::utils::debug::debug_io_enabled;
 
 mod authed;
 mod dispatch;
@@ -36,6 +37,9 @@ where
             .to_string(),
     };
     let response = serde_json::to_string(&auth_prompt)? + "\n";
+    if debug_io_enabled() {
+        println!(">>> [{}] {}", client_addr, response.trim_end());
+    }
     stream.write_all(response.as_bytes()).await?;
     stream.flush().await?;
 

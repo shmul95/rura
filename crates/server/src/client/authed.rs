@@ -7,6 +7,7 @@ use crate::messaging::handlers::send_direct;
 use crate::messaging::state::AppState;
 use crate::models::client_message::ClientMessage;
 use crate::utils::db_utils::{get_user_pubkey, set_user_pubkey};
+use crate::utils::debug::debug_io_enabled;
 use rusqlite::Connection;
 
 pub(super) async fn handle_client_message(
@@ -20,14 +21,18 @@ pub(super) async fn handle_client_message(
     let received = String::from_utf8_lossy(buffer).to_string();
     match serde_json::from_str::<ClientMessage>(&received) {
         Ok(msg) => {
-            // Avoid logging full payloads; only log command and sizes
-            println!(
-                "Received cmd '{}' from user {} ({}), data_len={}",
-                msg.command,
-                user_id,
-                client_addr,
-                msg.data.len()
-            );
+            if debug_io_enabled() {
+                println!("<<< [{} {}] {:?}", client_addr, user_id, msg);
+            } else {
+                // Keep concise log by default
+                println!(
+                    "Received cmd '{}' from user {} ({}), data_len={}",
+                    msg.command,
+                    user_id,
+                    client_addr,
+                    msg.data.len()
+                );
+            }
             match msg.command.as_str() {
                 "message" => {
                     #[derive(serde::Deserialize)]

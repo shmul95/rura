@@ -5,6 +5,7 @@ use tokio::io::{AsyncWrite, AsyncWriteExt};
 
 use crate::auth::{handle_auth_command_error, handle_auth_login, handle_auth_register};
 use crate::models::client_message::ClientMessage;
+use crate::utils::debug::debug_io_enabled;
 
 pub(super) async fn handle_unauthenticated_message<W>(
     stream: &mut W,
@@ -44,6 +45,9 @@ where
         data: "Invalid JSON".to_string(),
     };
     let response = serde_json::to_string(&error_msg)? + "\n";
+    if debug_io_enabled() {
+        println!(">>> [{}] {}", client_addr, response.trim_end());
+    }
     stream.write_all(response.as_bytes()).await?;
     stream.flush().await
 }

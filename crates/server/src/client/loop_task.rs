@@ -6,6 +6,7 @@ use tokio::select;
 use tokio::sync::mpsc;
 
 use crate::messaging::state::{AppState, ClientHandle};
+use crate::utils::debug::debug_io_enabled;
 
 use super::{dispatch, io_helpers};
 
@@ -37,6 +38,14 @@ where
                             break;
                         }
                         Ok(n) => {
+                            if debug_io_enabled() {
+                                let s = String::from_utf8_lossy(&buffer[..n]).to_string();
+                                if let Some(uid) = authenticated_user_id {
+                                    println!("<<< [{} {}] {}", client_addr, uid, s.trim_end());
+                                } else {
+                                    println!("<<< [{}] {}", client_addr, s.trim_end());
+                                }
+                            }
                             let was_unauth = authenticated_user_id.is_none();
                             dispatch::handle_read_success(
                                 stream,
@@ -66,6 +75,14 @@ where
                         Some(msg) => {
                             if let Ok(mut json) = serde_json::to_string(&msg) {
                                 json.push('\n');
+                                if debug_io_enabled() {
+                                    if let Some(uid) = authenticated_user_id {
+                                        print!(">>> [{} {}] ", client_addr, uid);
+                                    } else {
+                                        print!(">>> [{}] ", client_addr);
+                                    }
+                                    println!("{}", json.trim_end());
+                                }
                                 if let Err(e) = stream.write_all(json.as_bytes()).await {
                                     io_helpers::handle_read_error(client_addr, e).await;
                                     break;
@@ -86,6 +103,14 @@ where
                     break;
                 }
                 Ok(n) => {
+                    if debug_io_enabled() {
+                        let s = String::from_utf8_lossy(&buffer[..n]).to_string();
+                        if let Some(uid) = authenticated_user_id {
+                            println!("<<< [{} {}] {}", client_addr, uid, s.trim_end());
+                        } else {
+                            println!("<<< [{}] {}", client_addr, s.trim_end());
+                        }
+                    }
                     let was_unauth = authenticated_user_id.is_none();
                     dispatch::handle_read_success(
                         stream,
