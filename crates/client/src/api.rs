@@ -263,6 +263,7 @@ pub fn login_tls(
     let login = AuthRequest {
         passphrase,
         password,
+        identity_key: None,
     };
     let envelope = ClientMessage {
         command: "login".to_string(),
@@ -337,6 +338,7 @@ pub fn register_tls(
     let register = AuthRequest {
         passphrase,
         password,
+        identity_key: None,
     };
     let envelope = ClientMessage {
         command: "register".to_string(),
@@ -758,6 +760,7 @@ fn auth_over_stream(
     let auth = AuthRequest {
         passphrase,
         password,
+        identity_key: None,
     };
     let env = ClientMessage {
         command: command.to_string(),
