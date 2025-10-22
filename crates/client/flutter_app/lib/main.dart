@@ -200,28 +200,42 @@ class _HomePageState extends State<HomePage> {
       final pass = _passphrase.text;
       final pwd = _password.text;
 
-      final bundle = register
-          ? await registerAndLoadLocalHistoryTls(
+      // Stream-first login: open the persistent stream (this logs in inside Rust)
+      final rawStream = register
+          ? openMessageStreamRegisterTls(
               host: host,
               port: port,
               caPem: caPem,
               passphrase: pass,
               password: pwd,
-              limit: BigInt.from(500),
             )
-          : await loginAndLoadLocalHistoryTls(
+          : openMessageStreamTls(
               host: host,
               port: port,
               caPem: caPem,
               passphrase: pass,
               password: pwd,
-              limit: BigInt.from(500),
             );
+      // Convert to broadcast so we can await first() and also listen() later
+      final stream = rawStream.asBroadcastStream();
 
-      if (!bundle.success) {
-        setState(() => _status = bundle.message);
+      // Wait for the initial auth_ok event to get user_id
+      final first = await stream.first.timeout(const Duration(seconds: 5));
+      final firstMap = jsonDecode(first) as Map;
+      if (firstMap['type'] != 'auth_ok') {
+        setState(() => _status = 'Unexpected first event from stream');
         return;
       }
+      final userId = firstMap['user_id'] as int;
+
+      // Load local history now that we have the user id
+      final history = await loadLocalHistory(userId: userId, limit: BigInt.from(500));
+      final bundle = HistoryBundle(
+        success: true,
+        message: 'OK',
+        userId: userId,
+        messages: history,
+      );
 
       if (!mounted) return;
       final session = SessionConfig(
@@ -233,7 +247,7 @@ class _HomePageState extends State<HomePage> {
       );
       Navigator.of(context).push(
         MaterialPageRoute(
-          builder: (_) => ChatListPage(bundle: bundle, session: session),
+          builder: (_) => ChatListPage(bundle: bundle, session: session, incoming: stream),
         ),
       );
     } catch (e) {
@@ -292,10 +306,11 @@ class _HomePageState extends State<HomePage> {
 class ChatListPage extends StatelessWidget {
   final HistoryBundle bundle;
   final SessionConfig session;
-  const ChatListPage({super.key, required this.bundle, required this.session});
+  final Stream<String>? incoming;
+  const ChatListPage({super.key, required this.bundle, required this.session, this.incoming});
 
   @override
-  Widget build(BuildContext context) => _ChatListScaffold(bundle: bundle, session: session);
+  Widget build(BuildContext context) => _ChatListScaffold(bundle: bundle, session: session, incoming: incoming);
 
   static Future<int?> _promptForUserId(BuildContext context) async {
     final ctrl = TextEditingController();
@@ -326,7 +341,8 @@ class ChatListPage extends StatelessWidget {
 class _ChatListScaffold extends StatefulWidget {
   final HistoryBundle bundle;
   final SessionConfig session;
-  const _ChatListScaffold({required this.bundle, required this.session});
+  final Stream<String>? incoming;
+  const _ChatListScaffold({required this.bundle, required this.session, this.incoming});
   @override
   State<_ChatListScaffold> createState() => _ChatListScaffoldState();
 }
@@ -350,17 +366,20 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
   }
 
   void _startStream() {
-    final s = widget.session;
-    final stream = openMessageStreamTls(
-      host: s.host,
-      port: s.port,
-      caPem: s.caPem,
-      passphrase: s.passphrase,
-      password: s.password,
+    final stream = widget.incoming ?? openMessageStreamTls(
+      host: widget.session.host,
+      port: widget.session.port,
+      caPem: widget.session.caPem,
+      passphrase: widget.session.passphrase,
+      password: widget.session.password,
     );
     _sub = stream.listen((data) async {
       try {
         final map = jsonDecode(data) as Map;
+        if (map['type'] == 'auth_ok') {
+          // Already handled by HomePage; ignore here
+          return;
+        }
         final from = map['from_user_id'] as int;
         final bodyRaw = map['body'] as String;
         final body = _decodeEnvelope(bodyRaw);

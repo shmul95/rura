@@ -525,6 +525,9 @@ pub fn open_message_stream_tls(
     }
     let user_id = login.user_id.ok_or_else(|| "Missing user_id".to_string())?;
 
+    // Emit an initial auth_ok event so Dart can capture user_id without a separate login
+    let _ = sink.add(format!("{{\"type\":\"auth_ok\",\"user_id\":{}}}", user_id));
+
     // Configure a short read timeout to interleave reads with outgoing writes
     let tcp = tls.get_mut();
     let _ = tcp.set_read_timeout(Some(Duration::from_millis(200)));
@@ -578,6 +581,84 @@ pub fn open_message_stream_tls(
         }
         let _ = tls.flush();
         // Remove session entry when exiting
+        let mut g = SESSIONS.lock().unwrap();
+        g.remove(&user_id);
+    });
+
+    Ok(())
+}
+
+/// Keep a TLS session open and stream incoming direct messages (register flow).
+/// Same behavior as `open_message_stream_tls` but authenticates via `register`.
+#[frb]
+pub fn open_message_stream_register_tls(
+    host: String,
+    port: u16,
+    ca_pem: String,
+    passphrase: String,
+    password: String,
+    sink: StreamSink<String>,
+) -> Result<(), String> {
+    // Establish TLS and authenticate via register
+    let mut tls = make_tls_stream(&host, port, &ca_pem)?;
+    let login = auth_over_stream(&mut tls, "register", passphrase, password)?;
+    if !login.success {
+        tls.conn.send_close_notify();
+        let _ = tls.flush();
+        return Err(login.message);
+    }
+    let user_id = login.user_id.ok_or_else(|| "Missing user_id".to_string())?;
+
+    // Emit an initial auth_ok event so Dart can capture user_id without a separate login
+    let _ = sink.add(format!("{{\"type\":\"auth_ok\",\"user_id\":{}}}", user_id));
+
+    // Configure a short read timeout to interleave reads with outgoing writes
+    let tcp = tls.get_mut();
+    let _ = tcp.set_read_timeout(Some(Duration::from_millis(200)));
+
+    // Channel for outgoing writes from FRB API
+    let (tx, rx): (Sender<String>, Receiver<String>) = mpsc::channel();
+    {
+        let mut g = SESSIONS.lock().unwrap();
+        g.insert(user_id, tx);
+    }
+
+    // Spawn a dedicated thread to own the TLS stream, read incoming events, and perform writes.
+    thread::spawn(move || {
+        let mut tls = tls; // move into thread
+        let mut buf = [0u8; 1024];
+        let mut acc: Vec<u8> = Vec::new();
+        loop {
+            while let Ok(line) = rx.try_recv() {
+                let _ = tls.write_all(line.as_bytes());
+                let _ = tls.flush();
+            }
+            match tls.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    acc.extend_from_slice(&buf[..n]);
+                    while let Some(pos) = acc.iter().position(|&b| b == b'\n') {
+                        let line = acc.drain(..=pos).collect::<Vec<u8>>();
+                        let line = String::from_utf8_lossy(&line[..line.len().saturating_sub(1)])
+                            .to_string();
+                        if let Ok(wrapper) = serde_json::from_str::<ClientMessage>(&line) {
+                            if wrapper.command == "message" {
+                                let _ = sink.add(wrapper.data);
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut
+                    {
+                        // continue
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+        let _ = tls.flush();
         let mut g = SESSIONS.lock().unwrap();
         g.remove(&user_id);
     });

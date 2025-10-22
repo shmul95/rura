@@ -100,6 +100,22 @@ Stream<String> openMessageStreamTls({
   password: password,
 );
 
+/// Keep a TLS session open and stream incoming direct messages (register flow).
+/// Same behavior as `open_message_stream_tls` but authenticates via `register`.
+Stream<String> openMessageStreamRegisterTls({
+  required String host,
+  required int port,
+  required String caPem,
+  required String passphrase,
+  required String password,
+}) => RustLib.instance.api.crateApiOpenMessageStreamRegisterTls(
+  host: host,
+  port: port,
+  caPem: caPem,
+  passphrase: passphrase,
+  password: password,
+);
+
 /// Send a direct message using an existing open stream session for the given user_id.
 Future<void> sendDirectMessageOverStream({
   required PlatformInt64 userId,

@@ -64,7 +64,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => 1385879575;
+  int get rustContentHash => -637505290;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -116,6 +116,14 @@ abstract class RustLibApi extends BaseApi {
   });
 
   Future<LoginResponse> crateApiLoginTls({
+    required String host,
+    required int port,
+    required String caPem,
+    required String passphrase,
+    required String password,
+  });
+
+  Stream<String> crateApiOpenMessageStreamRegisterTls({
     required String host,
     required int port,
     required String caPem,
@@ -432,7 +440,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   );
 
   @override
-  Stream<String> crateApiOpenMessageStreamTls({
+  Stream<String> crateApiOpenMessageStreamRegisterTls({
     required String host,
     required int port,
     required String caPem,
@@ -455,6 +463,52 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
               generalizedFrbRustBinding,
               serializer,
               funcId: 7,
+              port: port_,
+            );
+          },
+          codec: SseCodec(
+            decodeSuccessData: sse_decode_unit,
+            decodeErrorData: sse_decode_String,
+          ),
+          constMeta: kCrateApiOpenMessageStreamRegisterTlsConstMeta,
+          argValues: [host, port, caPem, passphrase, password, sink],
+          apiImpl: this,
+        ),
+      ),
+    );
+    return sink.stream;
+  }
+
+  TaskConstMeta get kCrateApiOpenMessageStreamRegisterTlsConstMeta =>
+      const TaskConstMeta(
+        debugName: "open_message_stream_register_tls",
+        argNames: ["host", "port", "caPem", "passphrase", "password", "sink"],
+      );
+
+  @override
+  Stream<String> crateApiOpenMessageStreamTls({
+    required String host,
+    required int port,
+    required String caPem,
+    required String passphrase,
+    required String password,
+  }) {
+    final sink = RustStreamSink<String>();
+    unawaited(
+      handler.executeNormal(
+        NormalTask(
+          callFfi: (port_) {
+            final serializer = SseSerializer(generalizedFrbRustBinding);
+            sse_encode_String(host, serializer);
+            sse_encode_u_16(port, serializer);
+            sse_encode_String(caPem, serializer);
+            sse_encode_String(passphrase, serializer);
+            sse_encode_String(password, serializer);
+            sse_encode_StreamSink_String_Sse(sink, serializer);
+            pdeCallFfi(
+              generalizedFrbRustBinding,
+              serializer,
+              funcId: 8,
               port: port_,
             );
           },
@@ -499,7 +553,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 8,
+            funcId: 9,
             port: port_,
           );
         },
@@ -542,7 +596,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 9,
+            funcId: 10,
             port: port_,
           );
         },
@@ -583,7 +637,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 10,
+            funcId: 11,
             port: port_,
           );
         },
@@ -621,7 +675,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 11,
+            funcId: 12,
             port: port_,
           );
         },
@@ -668,7 +722,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 12,
+            funcId: 13,
             port: port_,
           );
         },
@@ -721,7 +775,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 13,
+            funcId: 14,
             port: port_,
           );
         },
