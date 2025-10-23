@@ -64,7 +64,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => -637505290;
+  int get rustContentHash => 750043079;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -304,7 +304,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 8,
+              funcId: 4,
               port: port_,
             );
           },
@@ -349,7 +349,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 9,
+            funcId: 5,
             port: port_,
           );
         },
@@ -367,49 +367,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiRegisterAndFetchHistoryTlsConstMeta =>
       const TaskConstMeta(
         debugName: "register_and_fetch_history_tls",
-        argNames: ["host", "port", "caPem", "passphrase", "password", "limit"],
-      );
-
-  @override
-  Future<HistoryBundle> crateApiRegisterAndLoadLocalHistoryTls({
-    required String host,
-    required int port,
-    required String caPem,
-    required String passphrase,
-    required String password,
-    BigInt? limit,
-  }) {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_String(host, serializer);
-          sse_encode_u_16(port, serializer);
-          sse_encode_String(caPem, serializer);
-          sse_encode_String(passphrase, serializer);
-          sse_encode_String(password, serializer);
-          sse_encode_opt_box_autoadd_usize(limit, serializer);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 10,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_history_bundle,
-          decodeErrorData: sse_decode_String,
-        ),
-        constMeta: kCrateApiRegisterAndLoadLocalHistoryTlsConstMeta,
-        argValues: [host, port, caPem, passphrase, password, limit],
-        apiImpl: this,
-      ),
-    );
-  }
-
-  TaskConstMeta get kCrateApiRegisterAndLoadLocalHistoryTlsConstMeta =>
-      const TaskConstMeta(
-        debugName: "register_and_load_local_history_tls",
         argNames: ["host", "port", "caPem", "passphrase", "password", "limit"],
       );
 
@@ -433,7 +390,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 11,
+            funcId: 6,
             port: port_,
           );
         },
@@ -471,7 +428,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 12,
+            funcId: 7,
             port: port_,
           );
         },
@@ -518,7 +475,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 13,
+            funcId: 8,
             port: port_,
           );
         },
@@ -555,41 +512,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           "body",
           "saved",
         ],
-      );
-
-  @override
-  Future<void> crateApiSetPubkeyOverStream({
-    required PlatformInt64 userId,
-    required String pubkey,
-  }) {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_i_64(userId, serializer);
-          sse_encode_String(pubkey, serializer);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 14,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_unit,
-          decodeErrorData: sse_decode_String,
-        ),
-        constMeta: kCrateApiSetPubkeyOverStreamConstMeta,
-        argValues: [userId, pubkey],
-        apiImpl: this,
-      ),
-    );
-  }
-
-  TaskConstMeta get kCrateApiSetPubkeyOverStreamConstMeta =>
-      const TaskConstMeta(
-        debugName: "set_pubkey_over_stream",
-        argNames: ["userId", "pubkey"],
       );
 
   @protected

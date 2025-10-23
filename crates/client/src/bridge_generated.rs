@@ -37,7 +37,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.11.1";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -637505290;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 750043079;
 
 // Section: executor
 
@@ -609,42 +609,26 @@ fn pde_ffi_dispatcher_primary_impl(
 ) {
     // Codec=Pde (Serialization + dispatch), see doc to use other codecs
     match func_id {
-        1 => wire__crate__api__append_local_message_impl(port, ptr, rust_vec_len, data_len),
-        2 => wire__crate__api__get_pubkey_tls_impl(port, ptr, rust_vec_len, data_len),
-        3 => wire__crate__api__load_local_history_impl(port, ptr, rust_vec_len, data_len),
-        4 => wire__crate__api__login_and_fetch_history_tls_impl(port, ptr, rust_vec_len, data_len),
-        5 => wire__crate__api__login_and_load_local_history_tls_impl(
+        1 => wire__crate__api__login_and_fetch_history_tls_impl(port, ptr, rust_vec_len, data_len),
+        2 => wire__crate__api__login_tls_impl(port, ptr, rust_vec_len, data_len),
+        3 => wire__crate__api__open_message_stream_register_tls_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        6 => wire__crate__api__login_tls_impl(port, ptr, rust_vec_len, data_len),
-        7 => wire__crate__api__open_message_stream_register_tls_impl(
-            port,
-            ptr,
-            rust_vec_len,
-            data_len,
-        ),
-        8 => wire__crate__api__open_message_stream_tls_impl(port, ptr, rust_vec_len, data_len),
-        9 => {
+        4 => wire__crate__api__open_message_stream_tls_impl(port, ptr, rust_vec_len, data_len),
+        5 => {
             wire__crate__api__register_and_fetch_history_tls_impl(port, ptr, rust_vec_len, data_len)
         }
-        10 => wire__crate__api__register_and_load_local_history_tls_impl(
+        6 => wire__crate__api__register_tls_impl(port, ptr, rust_vec_len, data_len),
+        7 => wire__crate__api__send_direct_message_over_stream_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        11 => wire__crate__api__register_tls_impl(port, ptr, rust_vec_len, data_len),
-        12 => wire__crate__api__send_direct_message_over_stream_impl(
-            port,
-            ptr,
-            rust_vec_len,
-            data_len,
-        ),
-        13 => wire__crate__api__send_direct_message_tls_impl(port, ptr, rust_vec_len, data_len),
-        14 => wire__crate__api__set_pubkey_over_stream_impl(port, ptr, rust_vec_len, data_len),
+        8 => wire__crate__api__send_direct_message_tls_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
