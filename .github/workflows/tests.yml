@@ -46,12 +46,6 @@ jobs:
     - name: Run tests
       run: cargo test --verbose
       
-    - name: Run unit tests only
-      run: cargo test --lib --verbose
-      
-    - name: Run integration tests only  
-      run: cargo test --test integration_tests --verbose
-
   coverage:
     name: Code Coverage
     runs-on: ubuntu-latest
