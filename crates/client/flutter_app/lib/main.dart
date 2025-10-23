@@ -228,14 +228,14 @@ class _HomePageState extends State<HomePage> {
       }
       final userId = firstMap['user_id'] as int;
 
-      // Fetch initial history from the server after auth
-      final bundle = await loginAndFetchHistoryTls(
-        host: host,
-        port: port,
-        caPem: caPem,
-        passphrase: pass,
-        password: pwd,
-        limit: BigInt.from(500),
+      // Load initial history from local cache to avoid re-login overwriting
+      // the active stream route on the server.
+      final history = await loadLocalHistory(userId: userId, limit: BigInt.from(500));
+      final bundle = HistoryBundle(
+        success: true,
+        message: 'OK',
+        userId: userId,
+        messages: history,
       );
 
       if (!mounted) return;

@@ -89,6 +89,28 @@ pub(super) async fn handle_client_message(
                         }
                     }
                 }
+                "history" => {
+                    // Server does not persist messages; return empty history.
+                    // Still respond with a proper history_response envelope for clients expecting it.
+                    // Ignore request contents (limit) since server does not persist messages.
+                    #[derive(serde::Serialize)]
+                    struct HistResp<'a> {
+                        success: bool,
+                        message: &'a str,
+                        messages: Vec<crate::messaging::models::HistoryMessage>,
+                    }
+                    // Return an empty list; clients may merge with local cache.
+                    let resp = HistResp {
+                        success: true,
+                        message: "OK",
+                        messages: Vec::new(),
+                    };
+                    let wrapper = ClientMessage {
+                        command: "history_response".to_string(),
+                        data: serde_json::to_string(&resp).unwrap(),
+                    };
+                    let _ = outbound.send(wrapper);
+                }
                 "set_pubkey" => {
                     #[derive(serde::Deserialize)]
                     struct SetPkReq {
