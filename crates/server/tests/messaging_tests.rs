@@ -101,11 +101,11 @@ async fn test_send_direct_to_unknown_user_sends_nothing() {
     let res = timeout(Duration::from_millis(50), rx_other.recv()).await;
     assert!(res.is_err(), "no message should be delivered to others");
 
-    // Message still should be persisted even if recipient is unknown/offline
+    // Server no longer persists messages; ensure nothing was stored
     let count: i64 = {
         let c = conn.lock().unwrap();
         c.query_row("SELECT COUNT(*) FROM messages", [], |row| row.get(0))
             .unwrap()
     };
-    assert_eq!(count, 1);
+    assert_eq!(count, 0);
 }

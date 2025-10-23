@@ -240,7 +240,9 @@ async fn relogin_overwrites_online_route_latest_wins() {
         &mut bob,
         &ClientMessage {
             command: "message".into(),
-            data: format!("{{\"to_user_id\":{alice_id},\"body\":\"hi alice again\"}}"),
+            data: format!(
+                "{{\"to_user_id\":{alice_id},\"body\":\"v1:RU5WUEs=:Tk9OQ0U=:Q0lQSEVSVEVYVA==\"}}"
+            ),
         },
     )
     .await;
