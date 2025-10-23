@@ -131,22 +131,16 @@ pub fn append_local_message(
     body: String,
     timestamp: String,
 ) -> Result<(), String> {
-    let peer = if from_user_id == user_id {
-        to_user_id
-    } else {
-        from_user_id
-    };
-    let mut msgs = read_chat(user_id, peer)?;
-    let next_id = msgs.last().map(|m| m.id + 1).unwrap_or(1);
-    msgs.push(LocalMsg {
-        id: next_id,
+    crate::local_storage::init_for_user(user_id)?;
+    // Persist messages to the on-disk database by default.
+    crate::local_storage::append_persistent_message(
+        user_id,
         from_user_id,
         to_user_id,
         body,
         timestamp,
-        saved: false,
-    });
-    write_chat(user_id, peer, &msgs)
+        false,
+    )
 }
 
 #[frb]
@@ -154,35 +148,8 @@ pub fn load_local_history(
     user_id: i64,
     limit: Option<usize>,
 ) -> Result<Vec<HistoryMessage>, String> {
-    let mut all: Vec<LocalMsg> = Vec::new();
-    for path in list_chat_files(user_id) {
-        if let Some(_stem) = path.file_stem().and_then(|s| s.to_str()) {
-            match fs::read_to_string(&path) {
-                Ok(data) => match serde_json::from_str::<Vec<LocalMsg>>(&data) {
-                    Ok(mut v) => all.append(&mut v),
-                    Err(_) => {}
-                },
-                Err(_) => {}
-            }
-        }
-    }
-    // Sort by (timestamp, id)
-    all.sort_by(|a, b| a.timestamp.cmp(&b.timestamp).then_with(|| a.id.cmp(&b.id)));
-    let lim = limit.unwrap_or(usize::MAX);
-    let out = all.into_iter().rev().take(lim).collect::<Vec<_>>();
-    let mapped: Vec<HistoryMessage> = out
-        .into_iter()
-        .rev()
-        .map(|m| HistoryMessage {
-            id: m.id,
-            from_user_id: m.from_user_id,
-            to_user_id: m.to_user_id,
-            body: m.body,
-            timestamp: m.timestamp,
-            saved: m.saved,
-        })
-        .collect();
-    Ok(mapped)
+    crate::local_storage::init_for_user(user_id)?;
+    crate::local_storage::load_history(user_id, limit)
 }
 
 fn build_root_store_from_pem(pem: &str) -> Result<RootCertStore, String> {
