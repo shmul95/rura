@@ -58,13 +58,7 @@ async fn test_send_direct_to_online_user_delivers_message() {
     assert_eq!(event.from_user_id, alice_id);
     assert_eq!(event.body, "hello world");
 
-    // Verify message persisted
-    let count: i64 = {
-        let c = conn.lock().unwrap();
-        c.query_row("SELECT COUNT(*) FROM messages", [], |row| row.get(0))
-            .unwrap()
-    };
-    assert_eq!(count, 1);
+    // No server-side persistence anymore; only delivery is asserted.
 }
 
 #[tokio::test]

@@ -51,8 +51,9 @@ if [[ ! -f "$LIB_PATH" ]]; then
   exit 3
 fi
 
-echo "[run_client] Launching Flutter app on device: $DEVICE"
+echo "[run_client] Launching Flutter app on device: $DEVICE (E2EE enforced)"
 pushd "$APP_DIR" >/dev/null
 flutter pub get
-flutter run -d "$DEVICE"
+# Enforce E2EE in the client UI via a compile-time define; the Rust layer also rejects plaintext bodies.
+flutter run -d "$DEVICE" --dart-define=REQUIRE_E2EE=true
 popd >/dev/null
