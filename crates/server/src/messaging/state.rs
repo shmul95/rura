@@ -9,12 +9,19 @@ pub struct ClientHandle {
     pub tx: mpsc::UnboundedSender<ClientMessage>,
 }
 
-#[derive(Default)]
 pub struct AppState {
     users: RwLock<HashMap<i64, ClientHandle>>, // user_id -> handle
+    require_e2ee: bool,
 }
 
 impl AppState {
+    pub fn new(require_e2ee: bool) -> Self {
+        Self {
+            users: RwLock::new(HashMap::new()),
+            require_e2ee,
+        }
+    }
+
     pub async fn register(&self, user_id: i64, handle: ClientHandle) {
         let mut guard = self.users.write().await;
         guard.insert(user_id, handle);
@@ -29,6 +36,16 @@ impl AppState {
         let guard = self.users.read().await;
         guard.get(&user_id).map(|h| h.tx.clone())
     }
+
+    pub fn require_e2ee(&self) -> bool {
+        self.require_e2ee
+    }
 }
 
 pub type SharedAppState = Arc<AppState>;
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self::new(true)
+    }
+}

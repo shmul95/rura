@@ -13,4 +13,8 @@ pub struct Args {
     // TLS private key (PEM; PKCS#8 or RSA). Required: server is TLS-only.
     #[arg(long, required = true)]
     pub tls_key: String,
+
+    // Enable verbose debug logging of raw inbound/outbound JSON lines
+    #[arg(long, default_value_t = false)]
+    pub debug_io: bool,
 }

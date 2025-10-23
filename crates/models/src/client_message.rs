@@ -10,6 +10,8 @@ pub struct ClientMessage {
 pub struct AuthRequest {
     pub passphrase: String,
     pub password: String,
+    #[serde(default)]
+    pub identity_key: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]

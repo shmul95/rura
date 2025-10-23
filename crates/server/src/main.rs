@@ -7,6 +7,7 @@ use rura_server::client::handle_client;
 use rura_server::messaging::state::AppState;
 use rura_server::models::args::Args;
 use rura_server::utils::db_utils::init_db;
+use rura_server::utils::debug::set_debug_io;
 use rura_server::utils::get_local_ip::get_local_ip;
 use rura_server::utils::tls::make_tls_acceptor;
 
@@ -23,8 +24,11 @@ async fn main() -> tokio::io::Result<()> {
     // Initialize SQLite database
     let conn = Arc::new(Mutex::new(init_db().expect("Failed to init the db")));
 
-    // Initialize shared in-memory state (online users)
-    let state = Arc::new(AppState::default());
+    // Initialize shared in-memory state (online users). E2EE is enforced by default.
+    let state = Arc::new(AppState::new(true));
+
+    // Set debug I/O logging flag
+    set_debug_io(args.debug_io);
 
     // Build TLS acceptor (TLS-only server)
     let tls_acceptor: TlsAcceptor = make_tls_acceptor(&args.tls_cert, &args.tls_key)

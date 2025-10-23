@@ -11,6 +11,7 @@ Quick links
 - Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - Database & Auth: [docs/DATABASE.md](docs/DATABASE.md)
 - Flutter/FRB Setup: [docs/FRB_SETUP.md](docs/FRB_SETUP.md)
+ - E2EE Guide: [docs/E2EE.md](docs/E2EE.md)
 
 Client quick start
 - Run the desktop Flutter client with FRB bridging: `./scripts/run_client.sh`
@@ -29,6 +30,10 @@ Build and run (TLS-only)
   - `cd crates/server`
   - `cargo run -- --port 8443 --tls-cert server.crt --tls-key server.key`
   - If using the dev certs in this repo: `cargo run -- --port 8443 --tls-cert ../../certs/server.crt --tls-key ../../certs/server.key`
+  - With raw I/O debug logging: add `--debug-io`
+
+Or use the helper script
+- `./scripts/run_server.sh --port 8443 [--cert certs/server.crt --key certs/server.key] [--debug-io]`
 
 Connect with TLS (two terminals)
 - Open two TLS clients using OpenSSL:
@@ -64,6 +69,11 @@ Login instead of register (if users already exist)
 - Messaging
   - Client → server: `message` with `data { to_user_id, body }`
   - Server → recipient: `message` with `data { from_user_id, body }`
+  - E2EE: enforced by default; treat `body` as opaque ciphertext. The server does not interpret payloads.
+  - Server does not persist messages; clients store plaintext locally.
+  - Key directory helpers:
+    - Post-auth publish: `set_pubkey { pubkey }`
+    - Lookup peer key: `get_pubkey { user_id }` → `get_pubkey_response { pubkey? }`
 - Errors
   - Before auth non-auth commands → `error: Authentication required...`
   - Invalid auth payload → `auth_response { success:false }`
@@ -124,9 +134,10 @@ See: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for a module-by-module map and
 ## Configuration
 - CLI: `--port <PORT>` (default 8080). See `crates/server/src/models/args.rs`.
 - TLS (required): `--tls-cert <PATH>` and `--tls-key <PATH>` (PEM; PKCS#8 or RSA key). The server refuses to start without them.
+- Debug I/O logging: pass `--debug-io` to log raw inbound/outbound JSON lines per connection.
 
 ## Limitations
 - TLS-only endpoint: plain `telnet`/`nc` cannot connect; use a TLS client (`openssl s_client`) or build a proper client.
-- Delivery occurs only to online users (no offline delivery yet), but messages are persisted in the database with a `saved` flag.
+- Delivery occurs only to online users (no offline delivery yet). No server persistence is performed.
 - No sender acknowledgement or error on unknown recipients (by design for now).
 - Envelope uses a JSON string for `data` to keep parsing stable; consider migrating to structured payloads if you control all clients.

@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 fn init_db_with_path<P: AsRef<std::path::Path>>(path: P) -> SqliteResult<Connection> {
     let conn = Connection::open(path)?;
 
-    // Create users table
+    // Create users table (without new columns that may be added later)
     conn.execute(
         "CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -21,40 +21,24 @@ fn init_db_with_path<P: AsRef<std::path::Path>>(path: P) -> SqliteResult<Connect
         [],
     )?;
 
-    // Create messages table (legacy columns sender/receiver) if missing
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            sender INTEGER NOT NULL,
-            receiver INTEGER NOT NULL,
-            content TEXT NOT NULL,
-            timestamp TEXT NOT NULL,
-            saved INTEGER NOT NULL DEFAULT 0,
-            FOREIGN KEY(sender) REFERENCES users(id),
-            FOREIGN KEY(receiver) REFERENCES users(id)
-        )",
-        [],
-    )?;
-
-    // Ensure `saved` column exists for older databases
+    // Ensure `pubkey` column exists for E2EE key distribution (added in-place for older DBs)
     {
-        let mut stmt = conn.prepare("PRAGMA table_info(messages)")?;
+        let mut stmt = conn.prepare("PRAGMA table_info(users)")?;
         let mut rows = stmt.query([])?;
-        let mut has_saved = false;
+        let mut has_pubkey = false;
         while let Some(row) = rows.next()? {
             let col_name: String = row.get(1)?;
-            if col_name == "saved" {
-                has_saved = true;
+            if col_name == "pubkey" {
+                has_pubkey = true;
                 break;
             }
         }
-        if !has_saved {
-            conn.execute(
-                "ALTER TABLE messages ADD COLUMN saved INTEGER NOT NULL DEFAULT 0",
-                [],
-            )?;
+        if !has_pubkey {
+            conn.execute("ALTER TABLE users ADD COLUMN pubkey TEXT", [])?;
         }
     }
+
+    // Note: Messages are no longer persisted on the server. Only `users` and `connections` are created.
 
     // Create connections table
     conn.execute(
@@ -163,79 +147,36 @@ pub async fn authenticate_user(
     }
 }
 
-pub async fn store_message(
-    conn: Arc<Mutex<Connection>>,
-    from_user_id: i64,
-    to_user_id: i64,
-    content: &str,
-    saved: bool,
-) -> SqliteResult<i64> {
-    let ts = chrono::Local::now().to_rfc3339();
-    let conn = conn.lock().unwrap();
-    conn.execute(
-        "INSERT INTO messages (sender, receiver, content, timestamp, saved) VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![from_user_id, to_user_id, content, ts, if saved { 1 } else { 0 }],
-    )?;
-    Ok(conn.last_insert_rowid())
-}
-
-pub async fn set_message_saved(
+// E2EE key distribution helpers
+pub async fn set_user_pubkey(
     conn: Arc<Mutex<Connection>>,
     user_id: i64,
-    message_id: i64,
-    saved: bool,
+    pubkey: &str,
 ) -> SqliteResult<bool> {
     let conn = conn.lock().unwrap();
     let updated = conn.execute(
-        "UPDATE messages SET saved = ?1 WHERE id = ?2 AND (sender = ?3 OR receiver = ?3)",
-        params![if saved { 1 } else { 0 }, message_id, user_id],
+        "UPDATE users SET pubkey = ?1 WHERE id = ?2",
+        params![pubkey, user_id],
     )?;
     Ok(updated == 1)
 }
 
-#[derive(Debug, Clone)]
-pub struct RawMessageRow {
-    pub id: i64,
-    pub sender: i64,
-    pub receiver: i64,
-    pub content: String,
-    pub timestamp: String,
-    pub saved: bool,
-}
-
-pub async fn fetch_messages_for_user(
+pub async fn get_user_pubkey(
     conn: Arc<Mutex<Connection>>,
     user_id: i64,
-    limit: usize,
-) -> SqliteResult<Vec<RawMessageRow>> {
+) -> SqliteResult<Option<String>> {
     let conn = conn.lock().unwrap();
-    let mut stmt = conn.prepare(
-        "SELECT id, sender, receiver, content, timestamp, saved
-         FROM messages
-         WHERE sender = ?1 OR receiver = ?1
-         ORDER BY id ASC
-         LIMIT ?2",
-    )?;
-    let mut rows = stmt.query(params![user_id, limit as i64])?;
-    let mut out: Vec<RawMessageRow> = Vec::new();
-    while let Some(row) = rows.next()? {
-        let id: i64 = row.get(0)?;
-        let sender: i64 = row.get(1)?;
-        let receiver: i64 = row.get(2)?;
-        let content: String = row.get(3)?;
-        let timestamp: String = row.get(4)?;
-        let saved_i: i64 = row.get(5)?;
-        out.push(RawMessageRow {
-            id,
-            sender,
-            receiver,
-            content,
-            timestamp,
-            saved: saved_i != 0,
-        });
+    let mut stmt = conn.prepare("SELECT pubkey FROM users WHERE id = ?1")?;
+    let mut rows = stmt.query(params![user_id])?;
+    if let Some(row) = rows.next()? {
+        let v: Option<String> = row.get(0)?;
+        Ok(v)
+    } else {
+        Ok(None)
     }
-    Ok(out)
 }
+
+// No message persistence functions: messages are stored only on clients.
 
 #[cfg(test)]
 mod tests {
@@ -258,7 +199,7 @@ mod tests {
     fn init_db_creates_required_tables() {
         let conn = init_db_with_path(":memory:").expect("failed to create in-memory db");
 
-        for table in ["users", "messages", "connections"] {
+        for table in ["users", "connections"] {
             let columns = columns_for(&conn, table).expect("failed to read pragma");
             assert!(
                 !columns.is_empty(),
@@ -352,5 +293,25 @@ mod tests {
 
         assert_eq!(count, 1);
         assert_eq!(ip, addr.to_string());
+    }
+
+    #[tokio::test]
+    async fn pubkey_set_and_get_roundtrip() {
+        let conn = Arc::new(Mutex::new(
+            init_db_with_path(":memory:").expect("failed to create db"),
+        ));
+
+        let uid = register_user(Arc::clone(&conn), "dave", "pw")
+            .await
+            .expect("reg");
+        let pk = "BASE64PUBKEY";
+        let ok = set_user_pubkey(Arc::clone(&conn), uid, pk)
+            .await
+            .expect("set pk");
+        assert!(ok);
+        let fetched = get_user_pubkey(Arc::clone(&conn), uid)
+            .await
+            .expect("get pk");
+        assert_eq!(fetched.as_deref(), Some(pk));
     }
 }

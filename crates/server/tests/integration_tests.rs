@@ -63,6 +63,7 @@ async fn test_complete_client_server_auth_flow() {
         data: serde_json::to_string(&AuthRequest {
             passphrase: "alice".to_string(),
             password: "secret123".to_string(),
+            identity_key: None,
         })
         .unwrap(),
     };
@@ -85,6 +86,7 @@ async fn test_complete_client_server_auth_flow() {
         data: serde_json::to_string(&AuthRequest {
             passphrase: "alice".to_string(),
             password: "secret123".to_string(),
+            identity_key: None,
         })
         .unwrap(),
     };
@@ -109,6 +111,7 @@ async fn test_registration_then_login_different_sessions() {
         data: serde_json::to_string(&AuthRequest {
             passphrase: "bob".to_string(),
             password: "mypassword".to_string(),
+            identity_key: None,
         })
         .unwrap(),
     };
@@ -131,6 +134,7 @@ async fn test_registration_then_login_different_sessions() {
         data: serde_json::to_string(&AuthRequest {
             passphrase: "bob".to_string(),
             password: "mypassword".to_string(),
+            identity_key: None,
         })
         .unwrap(),
     };
@@ -160,6 +164,7 @@ async fn test_multiple_failed_login_attempts() {
             data: serde_json::to_string(&AuthRequest {
                 passphrase: "charlie".to_string(),
                 password: "wrong".to_string(),
+                identity_key: None,
             })
             .unwrap(),
         };

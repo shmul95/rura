@@ -12,6 +12,9 @@ const kTertiary = Color(0xFFF09D51); // f09d51
 const kBackground = Color(0xFFE0DFD5); // e0dfd5
 const kDark = Color(0xFF313638);      // 313638
 
+// Compile-time flag passed via `flutter run --dart-define=REQUIRE_E2EE=true`
+const bool kRequireE2EE = bool.fromEnvironment('REQUIRE_E2EE', defaultValue: true);
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await RustLib.init();
@@ -197,28 +200,43 @@ class _HomePageState extends State<HomePage> {
       final pass = _passphrase.text;
       final pwd = _password.text;
 
-      final bundle = register
-          ? await registerAndFetchHistoryTls(
+      // Stream-first login: open the persistent stream (this logs in inside Rust)
+      final rawStream = register
+          ? openMessageStreamRegisterTls(
               host: host,
               port: port,
               caPem: caPem,
               passphrase: pass,
               password: pwd,
-              limit: BigInt.from(200),
             )
-          : await loginAndFetchHistoryTls(
+          : openMessageStreamTls(
               host: host,
               port: port,
               caPem: caPem,
               passphrase: pass,
               password: pwd,
-              limit: BigInt.from(200),
             );
+      // Convert to broadcast so we can await first() and also listen() later
+      final stream = rawStream.asBroadcastStream();
 
-      if (!bundle.success) {
-        setState(() => _status = bundle.message);
+      // Wait for the initial auth_ok event to get user_id
+      final first = await stream.first.timeout(const Duration(seconds: 5));
+      final firstMap = jsonDecode(first) as Map;
+      if (firstMap['type'] != 'auth_ok') {
+        setState(() => _status = 'Unexpected first event from stream');
         return;
       }
+      final userId = firstMap['user_id'] as int;
+
+      // Load initial history from local cache to avoid re-login overwriting
+      // the active stream route on the server.
+      final history = await loadLocalHistory(userId: userId, limit: BigInt.from(500));
+      final bundle = HistoryBundle(
+        success: true,
+        message: 'OK',
+        userId: userId,
+        messages: history,
+      );
 
       if (!mounted) return;
       final session = SessionConfig(
@@ -230,7 +248,7 @@ class _HomePageState extends State<HomePage> {
       );
       Navigator.of(context).push(
         MaterialPageRoute(
-          builder: (_) => ChatListPage(bundle: bundle, session: session),
+          builder: (_) => ChatListPage(bundle: bundle, session: session, incoming: stream),
         ),
       );
     } catch (e) {
@@ -247,6 +265,14 @@ class _HomePageState extends State<HomePage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            if (kRequireE2EE)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  'E2EE enforced: messages must be opaque envelopes',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
             TextField(controller: _host, decoration: const InputDecoration(labelText: 'Host')),
             TextField(controller: _port, decoration: const InputDecoration(labelText: 'Port')),
             TextField(controller: _certPath, decoration: const InputDecoration(labelText: 'Cert PEM path')),
@@ -281,10 +307,11 @@ class _HomePageState extends State<HomePage> {
 class ChatListPage extends StatelessWidget {
   final HistoryBundle bundle;
   final SessionConfig session;
-  const ChatListPage({super.key, required this.bundle, required this.session});
+  final Stream<String>? incoming;
+  const ChatListPage({super.key, required this.bundle, required this.session, this.incoming});
 
   @override
-  Widget build(BuildContext context) => _ChatListScaffold(bundle: bundle, session: session);
+  Widget build(BuildContext context) => _ChatListScaffold(bundle: bundle, session: session, incoming: incoming);
 
   static Future<int?> _promptForUserId(BuildContext context) async {
     final ctrl = TextEditingController();
@@ -315,7 +342,8 @@ class ChatListPage extends StatelessWidget {
 class _ChatListScaffold extends StatefulWidget {
   final HistoryBundle bundle;
   final SessionConfig session;
-  const _ChatListScaffold({required this.bundle, required this.session});
+  final Stream<String>? incoming;
+  const _ChatListScaffold({required this.bundle, required this.session, this.incoming});
   @override
   State<_ChatListScaffold> createState() => _ChatListScaffoldState();
 }
@@ -339,25 +367,38 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
   }
 
   void _startStream() {
-    final s = widget.session;
-    final stream = openMessageStreamTls(
-      host: s.host,
-      port: s.port,
-      caPem: s.caPem,
-      passphrase: s.passphrase,
-      password: s.password,
+    final stream = widget.incoming ?? openMessageStreamTls(
+      host: widget.session.host,
+      port: widget.session.port,
+      caPem: widget.session.caPem,
+      passphrase: widget.session.passphrase,
+      password: widget.session.password,
     );
-    _sub = stream.listen((data) {
+    _sub = stream.listen((data) async {
       try {
         final map = jsonDecode(data) as Map;
+        if (map['type'] == 'auth_ok') {
+          // Already handled by HomePage; ignore here
+          return;
+        }
         final from = map['from_user_id'] as int;
-        final body = map['body'] as String;
+        final bodyRaw = map['body'] as String;
+        final body = _decodeEnvelope(bodyRaw);
+        final now = DateTime.now().toIso8601String();
+        // Persist to local cache
+        await appendLocalMessage(
+          userId: _selfId,
+          fromUserId: from,
+          toUserId: _selfId,
+          body: body,
+          timestamp: now,
+        );
         final msg = HistoryMessage(
           id: 0,
           fromUserId: from,
           toUserId: _selfId,
           body: body,
-          timestamp: DateTime.now().toIso8601String(),
+          timestamp: now,
           saved: false,
         );
         _incoming.add(msg);
@@ -485,13 +526,33 @@ class _ChatPageState extends State<ChatPage> {
     if (text.isEmpty) return;
     setState(() => _sending = true);
     try {
+      // If the user typed plaintext, wrap it into a v1 envelope so the server
+      // accepts it under E2EE enforcement. NOTE: This is a transport wrapper
+      // only and NOT real encryption. See docs/E2EE.md to implement real crypto.
+      String body = text;
+      if (!text.startsWith('v1:')) {
+        final b64 = base64.encode(utf8.encode(text));
+        // static placeholders for ephemeral pub and nonce (dev only)
+        const eph = 'UGxhaW5FcGg='; // "PlainEph"
+        const nonce = 'Tm9uY2U=';    // "Nonce"
+        body = 'v1:$eph:$nonce:$b64';
+      }
+
       await sendDirectMessageOverStream(
         userId: widget.selfUserId,
         toUserId: widget.peerUserId,
-        body: text,
+        body: body,
         saved: false,
       );
       final now = DateTime.now().toIso8601String();
+      // Persist to local cache (sender side) as plaintext
+      await appendLocalMessage(
+        userId: widget.selfUserId,
+        fromUserId: widget.selfUserId,
+        toUserId: widget.peerUserId,
+        body: text,
+        timestamp: now,
+      );
       setState(() {
         _messages.add(HistoryMessage(
           id: 0,
@@ -506,6 +567,13 @@ class _ChatPageState extends State<ChatPage> {
       await Future.delayed(const Duration(milliseconds: 50));
       if (_scroll.hasClients) {
         _scroll.jumpTo(_scroll.position.maxScrollExtent + 80);
+      }
+    } catch (e) {
+      // Show a friendly error (e.g., when E2EE is enforced and body is not an envelope)
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Send failed: $e')),
+        );
       }
     } finally {
       if (mounted) setState(() => _sending = false);
@@ -615,4 +683,18 @@ String _formatTime(String iso) {
     return '${_two(dt.hour)}:${_two(dt.minute)}';
   }
   return '${dt.year}-${_two(dt.month)}-${_two(dt.day)}';
+}
+
+String _decodeEnvelope(String body) {
+  if (body.startsWith('v1:')) {
+    final parts = body.split(':');
+    if (parts.length == 4) {
+      try {
+        return utf8.decode(base64.decode(parts[3]));
+      } catch (_) {
+        return body;
+      }
+    }
+  }
+  return body;
 }

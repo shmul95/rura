@@ -2,13 +2,14 @@
 set -euo pipefail
 
 # Build and run the Rust server with TLS certs.
-# Usage: scripts/run_server.sh [--port PORT] [--cert PATH] [--key PATH]
+# Usage: scripts/run_server.sh [--port PORT] [--cert PATH] [--key PATH] [--debug-io]
 # Defaults:
 #   PORT: 8443
 #   CERT: <repo>/certs/server.crt
 #   KEY:  <repo>/certs/server.key
 
 PORT=8443
+DEBUG_IO=false
 
 # Resolve repo root (this script lives under scripts/)
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -31,8 +32,12 @@ while [[ $# -gt 0 ]]; do
       KEY="${2:?missing key path}"
       shift 2
       ;;
+    --debug-io)
+      DEBUG_IO=true
+      shift 1
+      ;;
     -h|--help)
-      echo "Usage: $0 [--port PORT] [--cert PATH] [--key PATH]"; exit 0;
+      echo "Usage: $0 [--port PORT] [--cert PATH] [--key PATH] [--debug-io]"; exit 0;
       ;;
     *)
       echo "Unknown argument: $1" >&2; exit 2;
@@ -59,6 +64,10 @@ fi
 
 echo "[run_server] Building server (release)"
 pushd "$SERVER_DIR" >/dev/null
-cargo run --release -- --port "$PORT" --tls-cert "$CERT" --tls-key "$KEY"
+ARGS=(--port "$PORT" --tls-cert "$CERT" --tls-key "$KEY")
+if [[ "$DEBUG_IO" == "true" ]]; then
+  echo "[run_server] Debug I/O logging enabled"
+  ARGS+=(--debug-io)
+fi
+cargo run --release -- "${ARGS[@]}"
 popd >/dev/null
-
