@@ -4,7 +4,7 @@ use rura_server::models::client_message::{AuthRequest, AuthResponse, ClientMessa
 use rusqlite::Connection;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
-use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 async fn setup_memory_db_with_pubkey() -> Arc<Mutex<Connection>> {
     let conn = Connection::open(":memory:").unwrap();
@@ -82,6 +82,7 @@ async fn pubkey_set_and_get_and_opaque_message_flow() {
         data: serde_json::to_string(&AuthRequest {
             passphrase: "alice".into(),
             password: "secret".into(),
+            identity_key: None,
         })
         .unwrap(),
     };
@@ -98,6 +99,7 @@ async fn pubkey_set_and_get_and_opaque_message_flow() {
         data: serde_json::to_string(&AuthRequest {
             passphrase: "bob".into(),
             password: "secret".into(),
+            identity_key: None,
         })
         .unwrap(),
     };
@@ -198,6 +200,7 @@ async fn e2ee_enforcement_rejects_plaintext() {
         data: serde_json::to_string(&AuthRequest {
             passphrase: "alice".into(),
             password: "secret".into(),
+            identity_key: None,
         })
         .unwrap(),
     };
@@ -213,6 +216,7 @@ async fn e2ee_enforcement_rejects_plaintext() {
         data: serde_json::to_string(&AuthRequest {
             passphrase: "bob".into(),
             password: "secret".into(),
+            identity_key: None,
         })
         .unwrap(),
     };

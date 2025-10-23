@@ -94,6 +94,7 @@ async fn test_full_auth_and_dm_persistence_and_save() {
         data: serde_json::to_string(&AuthRequest {
             passphrase: "alice".into(),
             password: "secret".into(),
+            identity_key: None,
         })
         .unwrap(),
     };
@@ -110,6 +111,7 @@ async fn test_full_auth_and_dm_persistence_and_save() {
         data: serde_json::to_string(&AuthRequest {
             passphrase: "bob".into(),
             password: "secret".into(),
+            identity_key: None,
         })
         .unwrap(),
     };

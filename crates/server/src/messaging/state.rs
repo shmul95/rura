@@ -22,11 +22,6 @@ impl AppState {
         }
     }
 
-    // Backward-compatible default now enforces E2EE
-    pub fn default() -> Self {
-        Self::new(true)
-    }
-
     pub async fn register(&self, user_id: i64, handle: ClientHandle) {
         let mut guard = self.users.write().await;
         guard.insert(user_id, handle);
@@ -48,3 +43,9 @@ impl AppState {
 }
 
 pub type SharedAppState = Arc<AppState>;
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self::new(true)
+    }
+}

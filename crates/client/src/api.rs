@@ -170,7 +170,7 @@ pub fn load_local_history(
     all.sort_by(|a, b| a.timestamp.cmp(&b.timestamp).then_with(|| a.id.cmp(&b.id)));
     let lim = limit.unwrap_or(usize::MAX);
     let out = all.into_iter().rev().take(lim).collect::<Vec<_>>();
-    let mut mapped: Vec<HistoryMessage> = out
+    let mapped: Vec<HistoryMessage> = out
         .into_iter()
         .rev()
         .map(|m| HistoryMessage {
@@ -774,8 +774,6 @@ pub fn get_pubkey_tls(
     #[derive(serde::Deserialize)]
     struct GetPkResp {
         success: bool,
-        message: String,
-        user_id: Option<i64>,
         pubkey: Option<String>,
     }
 

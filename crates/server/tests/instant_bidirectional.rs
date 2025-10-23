@@ -96,6 +96,7 @@ async fn instant_bidirectional_delivery() {
             data: serde_json::to_string(&AuthRequest {
                 passphrase: "alice".into(),
                 password: "secret".into(),
+                identity_key: None,
             })
             .unwrap(),
         },
@@ -114,6 +115,7 @@ async fn instant_bidirectional_delivery() {
             data: serde_json::to_string(&AuthRequest {
                 passphrase: "bob".into(),
                 password: "secret".into(),
+                identity_key: None,
             })
             .unwrap(),
         },
@@ -191,6 +193,7 @@ async fn relogin_overwrites_online_route_latest_wins() {
             data: serde_json::to_string(&AuthRequest {
                 passphrase: "alice".into(),
                 password: "secret".into(),
+                identity_key: None,
             })
             .unwrap(),
         },
@@ -208,6 +211,7 @@ async fn relogin_overwrites_online_route_latest_wins() {
             data: serde_json::to_string(&AuthRequest {
                 passphrase: "bob".into(),
                 password: "secret".into(),
+                identity_key: None,
             })
             .unwrap(),
         },
@@ -223,6 +227,7 @@ async fn relogin_overwrites_online_route_latest_wins() {
             data: serde_json::to_string(&AuthRequest {
                 passphrase: "alice".into(),
                 password: "secret".into(),
+                identity_key: None,
             })
             .unwrap(),
         },

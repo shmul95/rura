@@ -127,6 +127,7 @@ async fn test_duplicate_registration_returns_error() {
         data: serde_json::to_string(&AuthRequest {
             passphrase: "dupuser".to_string(),
             password: "pw".to_string(),
+            identity_key: None,
         })
         .unwrap(),
     };
@@ -168,6 +169,7 @@ async fn test_register_new_user_success() {
         data: serde_json::to_string(&AuthRequest {
             passphrase: "testuser".to_string(),
             password: "testpass".to_string(),
+            identity_key: None,
         })
         .unwrap(),
     };
@@ -205,6 +207,7 @@ async fn test_login_valid_user_success() {
         data: serde_json::to_string(&AuthRequest {
             passphrase: "testuser".to_string(),
             password: "testpass".to_string(),
+            identity_key: None,
         })
         .unwrap(),
     };
@@ -242,6 +245,7 @@ async fn test_login_invalid_credentials_error() {
         data: serde_json::to_string(&AuthRequest {
             passphrase: "testuser".to_string(),
             password: "wrongpass".to_string(),
+            identity_key: None,
         })
         .unwrap(),
     };
