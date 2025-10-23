@@ -24,8 +24,8 @@ async fn main() -> tokio::io::Result<()> {
     // Initialize SQLite database
     let conn = Arc::new(Mutex::new(init_db().expect("Failed to init the db")));
 
-    // Initialize shared in-memory state (online users). E2EE is enforced by default.
-    let state = Arc::new(AppState::new(true));
+    // Initialize shared in-memory state (online users)
+    let state = Arc::new(AppState::default());
 
     // Set debug I/O logging flag
     set_debug_io(args.debug_io);

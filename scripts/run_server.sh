@@ -71,3 +71,4 @@ if [[ "$DEBUG_IO" == "true" ]]; then
 fi
 cargo run --release -- "${ARGS[@]}"
 popd >/dev/null
+

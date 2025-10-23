@@ -15,9 +15,6 @@ See also:
 - `passphrase` TEXT UNIQUE: human-readable handle chosen by the user
 - `password` TEXT: Argon2 hash encoded in PHC format (algorithm, parameters, salt)
 
-### (removed) `messages`
-Messages are no longer persisted on the server. Each client stores plaintext locally (see docs/E2EE.md for details). Existing databases may still contain an old `messages` table; it is unused.
-
 ### `connections`
 - `id` INTEGER PRIMARY KEY AUTOINCREMENT
 - `ip` TEXT: remote client IP address
