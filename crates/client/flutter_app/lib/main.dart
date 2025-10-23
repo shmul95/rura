@@ -184,10 +184,9 @@ class SessionConfig {
 }
 
 class _HomePageState extends State<HomePage> {
-  final _host = TextEditingController(text: 'localhost');
-  final _port = TextEditingController(text: '8443');
-  final _certPath = TextEditingController(text: '../../../certs/ca.crt');
-  final _passphrase = TextEditingController(text: 'alice');
+  final _host = TextEditingController(text: '');
+  final _port = TextEditingController(text: '0');
+  final _certPath = TextEditingController(text: '');
   final _password = TextEditingController(text: 'secret');
   String _status = 'Ready';
 
@@ -197,7 +196,7 @@ class _HomePageState extends State<HomePage> {
       final host = _host.text.trim();
       final port = int.tryParse(_port.text.trim()) ?? 8443;
       final caPem = await File(_certPath.text.trim()).readAsString();
-      final pass = _passphrase.text;
+      final pass = '';
       final pwd = _password.text;
 
       // Stream-first login: open the persistent stream (this logs in inside Rust)
@@ -273,28 +272,22 @@ class _HomePageState extends State<HomePage> {
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ),
-            TextField(controller: _host, decoration: const InputDecoration(labelText: 'Host')),
-            TextField(controller: _port, decoration: const InputDecoration(labelText: 'Port')),
-            TextField(controller: _certPath, decoration: const InputDecoration(labelText: 'Cert PEM path')),
-            const SizedBox(height: 12),
-            TextField(controller: _passphrase, decoration: const InputDecoration(labelText: 'Passphrase')),
+            // Only ask for password to unlock local DB
             TextField(controller: _password, decoration: const InputDecoration(labelText: 'Password'), obscureText: true),
             const SizedBox(height: 16),
-            Row(
-              children: [
-                ElevatedButton.icon(
-                  onPressed: () => _authAndShowHistory(register: false),
-                  icon: const Icon(Icons.login),
-                  label: const Text('Login'),
-                ),
-                const SizedBox(width: 12),
-                OutlinedButton.icon(
-                  onPressed: () => _authAndShowHistory(register: true),
-                  icon: const Icon(Icons.app_registration),
-                  label: const Text('Register'),
-                ),
-              ],
-            ),
+            Row(children: [
+              ElevatedButton.icon(
+                onPressed: _unlockAndShowHistory,
+                icon: const Icon(Icons.lock_open),
+                label: const Text('Unlock Local'),
+              ),
+              const SizedBox(width: 12),
+              OutlinedButton.icon(
+                onPressed: _registerLocal,
+                icon: const Icon(Icons.app_registration),
+                label: const Text('Register Local'),
+              ),
+            ]),
             const SizedBox(height: 16),
             Text(_status, style: Theme.of(context).textTheme.bodyMedium),
           ],
@@ -302,6 +295,15 @@ class _HomePageState extends State<HomePage> {
       ),
     );
   }
+}
+
+extension on Stream<String> {
+  Stream<String> asEmptyBroadcast() => const Stream<String>.empty().asBroadcastStream();
+}
+
+extension on Stream<String>? {
+  Stream<String> orEmptyBroadcast() =>
+      (this ?? const Stream<String>.empty()).asBroadcastStream();
 }
 
 class ChatListPage extends StatelessWidget {
@@ -671,6 +673,60 @@ class _ChatPageState extends State<ChatPage> {
         ],
       ),
     );
+  }
+}
+
+extension _OfflineNav on _HomePageState {
+  Future<void> _unlockAndShowHistory() async {
+    setState(() => _status = 'Unlocking local...');
+    try {
+      final pwd = _password.text;
+      // Use offline branch: host empty, port 0
+      final bundle = await loginAndLoadLocalHistoryTls(
+        host: '',
+        port: 0,
+        caPem: '',
+        passphrase: '',
+        password: pwd,
+        limit: BigInt.from(500),
+      );
+      if (!mounted) return;
+      // No stream in offline mode
+      final session = SessionConfig(host: '', port: 0, caPem: '', passphrase: '', password: pwd);
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => ChatListPage(bundle: bundle, session: session, incoming: const Stream<String>.empty()),
+        ),
+      );
+      setState(() => _status = 'Unlocked');
+    } catch (e) {
+      setState(() => _status = 'Unlock failed: $e');
+    }
+  }
+
+  Future<void> _registerLocal() async {
+    setState(() => _status = 'Registering local...');
+    try {
+      final pwd = _password.text;
+      final bundle = await registerAndLoadLocalHistoryTls(
+        host: '',
+        port: 0,
+        caPem: '',
+        passphrase: '',
+        password: pwd,
+        limit: BigInt.from(500),
+      );
+      if (!mounted) return;
+      final session = SessionConfig(host: '', port: 0, caPem: '', passphrase: '', password: pwd);
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => ChatListPage(bundle: bundle, session: session, incoming: const Stream<String>.empty()),
+        ),
+      );
+      setState(() => _status = 'Registered');
+    } catch (e) {
+      setState(() => _status = 'Register failed: $e');
+    }
   }
 }
 

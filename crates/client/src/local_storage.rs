@@ -31,12 +31,16 @@ fn user_dir(user_id: i64) -> PathBuf {
     cache_base_dir().join("users").join(user_id.to_string())
 }
 
+fn current_user_path() -> PathBuf {
+    cache_base_dir().join("current_user.json")
+}
+
 fn ensure_dir(path: &Path) -> Result<(), String> {
     fs::create_dir_all(path).map_err(|e| format!("Failed to create dir {}: {e}", path.display()))
 }
 
-fn persistent_db_path(user_id: i64) -> PathBuf {
-    user_dir(user_id).join("persistent.db")
+fn encrypted_db_path(user_id: i64) -> PathBuf {
+    user_dir(user_id).join("persistent.enc")
 }
 
 fn init_persistent_schema(conn: &Connection) -> Result<(), String> {
@@ -110,11 +114,41 @@ pub fn init_for_user(user_id: i64) -> Result<(), String> {
 
     let dir = user_dir(user_id);
     ensure_dir(&dir)?;
-    let path = persistent_db_path(user_id);
-
-    let persistent_conn =
-        Connection::open(&path).map_err(|e| format!("open persistent db failed: {e}"))?;
+    let enc_path = encrypted_db_path(user_id);
+    // Always keep persistent in memory; on disk is encrypted snapshot
+    let persistent_conn = Connection::open_in_memory()
+        .map_err(|e| format!("open in-memory persistent failed: {e}"))?;
     init_persistent_schema(&persistent_conn)?;
+    // If an encrypted snapshot exists, restore it into memory
+    if enc_path.exists() {
+        let data = fs::read(&enc_path).map_err(|e| format!("read {}: {e}", enc_path.display()))?;
+        let plain = crate::security::decrypt_blob(user_id, &data)?;
+        // Write to a temp file, import into memory, then delete temp
+        let tmp = user_dir(user_id).join("restore.tmp.db");
+        fs::write(&tmp, plain).map_err(|e| format!("write {}: {e}", tmp.display()))?;
+        // Attach tmp and copy known tables
+        {
+            let attach = format!("ATTACH DATABASE '{}' AS disk;", tmp.display());
+            persistent_conn
+                .execute_batch(&attach)
+                .map_err(|e| format!("attach tmp: {e}"))?;
+            // Create schema in memory first (already done), then copy if tables exist
+            let _ = persistent_conn.execute(
+                "INSERT INTO messages (from_user_id, to_user_id, body, timestamp, saved)
+                 SELECT from_user_id, to_user_id, body, timestamp, saved FROM disk.messages",
+                [],
+            );
+            let _ = persistent_conn.execute(
+                "INSERT INTO contacts (user_id, pubkey)
+                 SELECT user_id, pubkey FROM disk.contacts",
+                [],
+            );
+            persistent_conn
+                .execute_batch("DETACH DATABASE disk;")
+                .map_err(|e| format!("detach tmp: {e}"))?;
+        }
+        let _ = fs::remove_file(&tmp);
+    }
     let persistent = Arc::new(Mutex::new(persistent_conn));
 
     let ephemeral_conn =
@@ -131,7 +165,7 @@ pub fn init_for_user(user_id: i64) -> Result<(), String> {
 
     let storage = LocalStorage {
         user_id,
-        persistent_path: path,
+        persistent_path: enc_path,
         persistent,
         ephemeral,
     };
@@ -192,7 +226,9 @@ pub fn append_persistent_message(
             )
             .map(|_| ())
             .map_err(|e| format!("insert persistent failed: {e}"))
-    })
+    })?;
+    // After modification, flush to encrypted snapshot
+    flush_persistent(user_id)
 }
 
 /// Load merged history from both persistent and ephemeral stores, ordered by time.
@@ -270,4 +306,50 @@ pub fn wipe_ephemeral(user_id: i64) -> Result<(), String> {
             .map(|_| ())
             .map_err(|e| format!("wipe ephemeral failed: {e}"))
     })
+}
+
+pub fn set_current_user(user_id: i64) -> Result<(), String> {
+    ensure_dir(&cache_base_dir())?;
+    let path = current_user_path();
+    let data = serde_json::to_string_pretty(&CurrentUser { user_id }).unwrap();
+    fs::write(&path, data).map_err(|e| format!("write {}: {e}", path.display()))
+}
+
+pub fn get_current_user() -> Result<Option<i64>, String> {
+    let path = current_user_path();
+    if !path.exists() {
+        return Ok(None);
+    }
+    let data = fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    let cur: CurrentUser =
+        serde_json::from_str(&data).map_err(|e| format!("parse {}: {e}", path.display()))?;
+    Ok(Some(cur.user_id))
+}
+
+fn flush_persistent(user_id: i64) -> Result<(), String> {
+    with_store(user_id, |store| {
+        // Export in-memory DB to a temporary plain file
+        let tmp = user_dir(user_id).join("plain.tmp.db");
+        let tmp_str = tmp.to_string_lossy();
+        store
+            .persistent
+            .lock()
+            .unwrap()
+            .execute(&format!("VACUUM INTO '{}';", tmp_str), [])
+            .map_err(|e| format!("vacuum into failed: {e}"))?;
+        let bytes = fs::read(&tmp).map_err(|e| format!("read {}: {e}", tmp.display()))?;
+        let enc = crate::security::encrypt_blob(user_id, &bytes)?;
+        fs::write(&store.persistent_path, enc)
+            .map_err(|e| format!("write {}: {e}", store.persistent_path.display()))?;
+        let _ = fs::remove_file(&tmp);
+        Ok(())
+    })
+}
+
+pub fn snapshot_persistent(user_id: i64) -> Result<(), String> {
+    flush_persistent(user_id)
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CurrentUser {
+    user_id: i64,
 }

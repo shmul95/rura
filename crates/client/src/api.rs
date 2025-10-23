@@ -825,6 +825,13 @@ fn auth_over_stream(
     }
     let resp: AuthResponse = serde_json::from_str(&wrapper.data)
         .map_err(|e| format!("Invalid auth_response data: {e}"))?;
+    // Unlock local storage using the provided password when login succeeds
+    if resp.success {
+        if let Some(uid) = resp.user_id {
+            let _ = crate::security::unlock_local(uid, &auth.password);
+            let _ = crate::local_storage::set_current_user(uid);
+        }
+    }
     Ok(LoginResponse {
         success: resp.success,
         message: resp.message,
@@ -869,6 +876,23 @@ pub fn login_and_load_local_history_tls(
     password: String,
     limit: Option<usize>,
 ) -> Result<HistoryBundle, String> {
+    if host.trim().is_empty() || port == 0 {
+        // Offline unlock: use last known user id
+        let uid = crate::local_storage::get_current_user()?;
+        let Some(uid) = uid else {
+            return Err("No known local user to unlock".to_string());
+        };
+        crate::security::unlock_local(uid, &password)?;
+        crate::local_storage::init_for_user(uid)?;
+        let messages = load_local_history(uid, limit)?;
+        return Ok(HistoryBundle {
+            success: true,
+            message: "Unlocked local storage".to_string(),
+            user_id: Some(uid),
+            messages,
+        });
+    }
+
     let mut tls = make_tls_stream(&host, port, &ca_pem)?;
     let login = auth_over_stream(&mut tls, "login", passphrase, password)?;
     tls.conn.send_close_notify();
@@ -898,6 +922,42 @@ pub fn register_and_load_local_history_tls(
     password: String,
     limit: Option<usize>,
 ) -> Result<HistoryBundle, String> {
+    if host.trim().is_empty() || port == 0 {
+        // Offline register: create a new local user and initialize encrypted DB
+        // Choose next user id based on existing directories
+        let users_dir = std::env::current_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from("."))
+            .join("../.cache")
+            .join("users");
+        let _ = std::fs::create_dir_all(&users_dir);
+        let mut max_id: i64 = 0;
+        if let Ok(rd) = std::fs::read_dir(&users_dir) {
+            for ent in rd.flatten() {
+                if let Some(name) = ent.file_name().to_str() {
+                    if let Ok(n) = name.parse::<i64>() {
+                        if n > max_id {
+                            max_id = n;
+                        }
+                    }
+                }
+            }
+        }
+        let new_id = max_id + 1;
+        // Derive key, init storage, generate identity, set current user, snapshot empty DB
+        crate::security::unlock_local(new_id, &password)?;
+        crate::local_storage::init_for_user(new_id)?;
+        let _ = crate::security::generate_and_store_identity(new_id)?;
+        crate::local_storage::set_current_user(new_id)?;
+        let _ = crate::local_storage::snapshot_persistent(new_id);
+        let messages = load_local_history(new_id, limit)?;
+        return Ok(HistoryBundle {
+            success: true,
+            message: "Local user created".to_string(),
+            user_id: Some(new_id),
+            messages,
+        });
+    }
+
     let mut tls = make_tls_stream(&host, port, &ca_pem)?;
     let reg = auth_over_stream(&mut tls, "register", passphrase, password)?;
     tls.conn.send_close_notify();
@@ -905,6 +965,10 @@ pub fn register_and_load_local_history_tls(
     let mut messages = Vec::new();
     if reg.success {
         if let Some(uid) = reg.user_id {
+            // Generate identity after successful server registration if missing
+            if crate::security::load_identity(uid)?.is_none() {
+                let _ = crate::security::generate_and_store_identity(uid)?;
+            }
             messages = load_local_history(uid, limit)?;
         }
     }
