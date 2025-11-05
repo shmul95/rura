@@ -272,6 +272,27 @@ class _HomePageState extends State<HomePage> {
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ),
+            // Server connection (optional): host/port/CA for online mode
+            TextField(controller: _host, decoration: const InputDecoration(labelText: 'Server host (e.g., 127.0.0.1)')),
+            const SizedBox(height: 8),
+            TextField(controller: _port, decoration: const InputDecoration(labelText: 'Server port (e.g., 8443)'), keyboardType: TextInputType.number),
+            const SizedBox(height: 8),
+            TextField(controller: _certPath, decoration: const InputDecoration(labelText: 'CA cert path (e.g., certs/ca.crt)')),
+            const SizedBox(height: 12),
+            Row(children: [
+              ElevatedButton.icon(
+                onPressed: () => _authAndShowHistory(register: false),
+                icon: const Icon(Icons.login),
+                label: const Text('Login (Server)'),
+              ),
+              const SizedBox(width: 12),
+              OutlinedButton.icon(
+                onPressed: () => _authAndShowHistory(register: true),
+                icon: const Icon(Icons.person_add_alt_1),
+                label: const Text('Register (Server)'),
+              ),
+            ]),
+            const Divider(height: 24),
             // Only ask for password to unlock local DB
             TextField(controller: _password, decoration: const InputDecoration(labelText: 'Password'), obscureText: true),
             const SizedBox(height: 16),
@@ -315,13 +336,13 @@ class ChatListPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) => _ChatListScaffold(bundle: bundle, session: session, incoming: incoming);
 
-  static Future<int?> _promptForUserId(BuildContext context) async {
+  static Future<dynamic> _promptForUserId(BuildContext context) async {
     final idCtrl = TextEditingController();
     final pkCtrl = TextEditingController();
-    return showDialog<int>(
+    return showDialog<dynamic>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('New chat'),
+        title: const Text('Add contact'),
         content: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -350,8 +371,10 @@ class ChatListPage extends StatelessWidget {
                 // TEMPORARY: Print entered identity and pubkey; wiring to storage occurs via FRB when available
                 // ignore: avoid_print
                 print('(TEMPORARY) New chat: id=$rid pubkey=$pk');
+                Navigator.pop(ctx, { 'rid': rid, 'pk': pk });
+              } else {
+                Navigator.pop(ctx, null);
               }
-              Navigator.pop(ctx, null);
             },
             child: const Text('Start'),
           ),
@@ -401,6 +424,10 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
         final map = jsonDecode(data) as Map;
         if (map['type'] == 'auth_ok') {
           // Already handled by HomePage; ignore here
+          return;
+        }
+        if (map.containsKey('from_identity')) {
+          // Identity-based events are handled in ChatIdentityPage
           return;
         }
         final from = map['from_user_id'] as int;
@@ -485,21 +512,304 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
       ),
       floatingActionButton: FloatingActionButton(
         onPressed: () async {
-          final peer = await ChatListPage._promptForUserId(context);
-          if (peer == null) return;
-          Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (_) => ChatPage(
-                session: widget.session,
-                selfUserId: _selfId,
-                peerUserId: peer,
-                initial: const [],
-                inbound: _incoming.stream,
+          final sel = await ChatListPage._promptForUserId(context);
+          if (sel == null) return;
+          if (sel is Map && sel['rid'] is String && sel['pk'] is String) {
+            final rid = sel['rid'] as String;
+            final pk = sel['pk'] as String;
+            try { await addContact(userId: rid, pubkey: pk); } catch (_) {}
+            // Publish our own pubkey over the stream if available (best effort)
+            try {
+              final myPk = await getAccountPubkey();
+              // Requires an active stream; ignore failure
+              await setPubkeyOverStream(userId: _selfId, pubkey: myPk);
+            } catch (_) {}
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => ChatIdentityPage(
+                  session: widget.session,
+                  selfUserId: _selfId,
+                  recipientId: rid,
+                  recipientPubKey: pk,
+                  incomingRaw: widget.incoming ?? openMessageStreamTls(
+                    host: widget.session.host,
+                    port: widget.session.port,
+                    caPem: widget.session.caPem,
+                    passphrase: widget.session.passphrase,
+                    password: widget.session.password,
+                  ),
+                ),
               ),
-            ),
-          );
+            );
+          } else if (sel is int) {
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => ChatPage(
+                  session: widget.session,
+                  selfUserId: _selfId,
+                  peerUserId: sel,
+                  initial: const [],
+                  inbound: _incoming.stream,
+                ),
+              ),
+            );
+          }
         },
         child: const Icon(Icons.chat),
+      ),
+    );
+  }
+}
+
+class ChatIdentityPage extends StatefulWidget {
+  final SessionConfig session;
+  final int selfUserId;
+  final String recipientId;
+  final String recipientPubKey;
+  final Stream<String> incomingRaw;
+  const ChatIdentityPage({super.key, required this.session, required this.selfUserId, required this.recipientId, required this.recipientPubKey, required this.incomingRaw});
+  @override
+  State<ChatIdentityPage> createState() => _ChatIdentityPageState();
+}
+
+class _ChatIdentityPageState extends State<ChatIdentityPage> {
+  final _input = TextEditingController();
+  final _scroll = ScrollController();
+  bool _sending = false;
+  final List<HistoryMessage> _messages = [];
+  StreamSubscription<String>? _sub;
+
+  @override
+  void initState() {
+    super.initState();
+    _sub = widget.incomingRaw.listen((data) async {
+      try {
+        final map = jsonDecode(data) as Map;
+        if (map['type'] == 'auth_ok') return;
+        final fromId = (map['from_identity'] ?? '').toString();
+        final bodyRaw = map['body'] as String? ?? '';
+        if (fromId == widget.recipientId) {
+          final body = _decodeEnvelope(bodyRaw);
+          if (body.startsWith('CONTACT::')) {
+            final parts = body.split('::');
+            if (parts.length >= 3) {
+              final pid = parts[1];
+              final ppk = parts[2];
+              try { await addContact(userId: pid, pubkey: ppk); } catch (_) {}
+            }
+          }
+          final now = DateTime.now().toIso8601String();
+          final msg = HistoryMessage(
+            id: 0,
+            fromUserId: 0,
+            toUserId: widget.selfUserId,
+            body: body,
+            timestamp: now,
+            saved: false,
+          );
+          setState(() => _messages.add(msg));
+          if (_scroll.hasClients) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (_scroll.hasClients) {
+                _scroll.jumpTo(_scroll.position.maxScrollExtent + 80);
+              }
+            });
+          }
+        }
+      } catch (_) {}
+    });
+    // Best-effort contact handshake to let the peer auto-add us
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final myId = await getAccountId();
+      final myPk = await getAccountPubkey();
+      String payload = 'CONTACT::' + myId + '::' + myPk;
+      final b64 = base64.encode(utf8.encode(payload));
+      const eph = 'UGxhaW5FcGg='; // dev placeholder
+      const nonce = 'Tm9uY2U=';    // dev placeholder
+      final body = 'v1:$eph:$nonce:$b64';
+      try {
+        await sendDirectMessageOverStreamToIdentity(
+          userId: widget.selfUserId,
+          toIdentity: widget.recipientId,
+          body: body,
+          saved: false,
+        );
+      } catch (_) {}
+    });
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _send() async {
+    final text = _input.text.trim();
+    if (text.isEmpty) return;
+    setState(() => _sending = true);
+    try {
+      // If the user typed plaintext, wrap into a v1 envelope (dev-only transport wrapper)
+      String body = text;
+      if (!text.startsWith('v1:')) {
+        final b64 = base64.encode(utf8.encode(text));
+        const eph = 'UGxhaW5FcGg='; // "PlainEph"
+        const nonce = 'Tm9uY2U='; // "Nonce"
+        body = 'v1:$eph:$nonce:$b64';
+      }
+      try {
+        await sendDirectMessageOverStreamToIdentity(
+          userId: widget.selfUserId,
+          toIdentity: widget.recipientId,
+          body: body,
+          saved: false,
+        );
+      } catch (e) {
+        final msg = e.toString();
+        final host = widget.session.host.trim();
+        final port = widget.session.port;
+        if (msg.contains('No active stream session for user') && host.isNotEmpty && port > 0) {
+          // Attempt to open a stream session on-demand, then retry once.
+          final stream = openMessageStreamTls(
+            host: host,
+            port: port,
+            caPem: widget.session.caPem,
+            passphrase: widget.session.passphrase,
+            password: widget.session.password,
+          );
+          _sub?.cancel();
+          _sub = stream.listen((data) {
+            try {
+              final map = jsonDecode(data) as Map;
+              if (map['type'] == 'auth_ok') return;
+              final fromId = (map['from_identity'] ?? '').toString();
+              final bodyRaw = map['body'] as String? ?? '';
+              if (fromId == widget.recipientId) {
+                final body = _decodeEnvelope(bodyRaw);
+                final now = DateTime.now().toIso8601String();
+                final msg = HistoryMessage(
+                  id: 0,
+                  fromUserId: 0,
+                  toUserId: widget.selfUserId,
+                  body: body,
+                  timestamp: now,
+                  saved: false,
+                );
+                setState(() => _messages.add(msg));
+              }
+            } catch (_) {}
+          });
+          await Future.delayed(const Duration(milliseconds: 150));
+          await sendDirectMessageOverStreamToIdentity(
+            userId: widget.selfUserId,
+            toIdentity: widget.recipientId,
+            body: body,
+            saved: false,
+          );
+        } else {
+          // Show a friendly error, but do not crash UI
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Send failed: ' + msg)),
+          );
+          return;
+        }
+      }
+      final now = DateTime.now().toIso8601String();
+      final msg = HistoryMessage(
+        id: 0,
+        fromUserId: widget.selfUserId,
+        toUserId: 0,
+        body: text,
+        timestamp: now,
+        saved: false,
+      );
+      setState(() {
+        _messages.add(msg);
+        _input.clear();
+      });
+      if (_scroll.hasClients) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (_scroll.hasClients) {
+            _scroll.jumpTo(_scroll.position.maxScrollExtent + 80);
+          }
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ridShort = widget.recipientId.length > 10 ? widget.recipientId.substring(0, 10) + '…' : widget.recipientId;
+    return Scaffold(
+      appBar: AppBar(title: Text('Chat: $ridShort')),
+      body: Column(
+        children: [
+          Expanded(
+            child: ListView.builder(
+              controller: _scroll,
+              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+              itemCount: _messages.length,
+              itemBuilder: (context, index) {
+                final m = _messages[index];
+                final fromSelf = m.fromUserId == widget.selfUserId;
+                return Align(
+                  alignment: fromSelf ? Alignment.centerRight : Alignment.centerLeft,
+                  child: Container(
+                    margin: const EdgeInsets.symmetric(vertical: 4),
+                    padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                    constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.7),
+                    decoration: BoxDecoration(
+                      color: fromSelf ? kPrimary : kSecondary,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: fromSelf ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          m.body,
+                          style: TextStyle(color: fromSelf ? Colors.white : Colors.black),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          _formatTime(m.timestamp),
+                          style: Theme.of(context).textTheme.bodySmall?.copyWith(color: fromSelf ? Colors.white70 : const Color(0xCC000000)),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.all(8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _input,
+                      decoration: const InputDecoration(
+                        hintText: 'Type a message',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    onPressed: _sending ? null : _send,
+                    icon: _sending
+                        ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.send),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

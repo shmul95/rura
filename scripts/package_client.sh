@@ -25,8 +25,8 @@ fi
 mkdir -p "$OUTPUT_DIR"
 
 echo "[package_client] Building Rust client library (release)..."
-cd "$REPO_ROOT/crates/client"
-cargo build --release --quiet
+cd "$REPO_ROOT"
+cargo build --release -p rura_client --quiet
 
 echo "[package_client] Copying Flutter app..."
 cp -r "$REPO_ROOT/crates/client/flutter_app" "$OUTPUT_DIR/"
@@ -37,16 +37,21 @@ rm -rf "$OUTPUT_DIR/flutter_app/.dart_tool"
 
 echo "[package_client] Copying Rust library..."
 mkdir -p "$OUTPUT_DIR/lib"
-if [ -f "$REPO_ROOT/crates/client/target/release/librura_client.so" ]; then
-    cp "$REPO_ROOT/crates/client/target/release/librura_client.so" "$OUTPUT_DIR/lib/"
-elif [ -f "$REPO_ROOT/crates/client/target/release/librura_client.dylib" ]; then
-    cp "$REPO_ROOT/crates/client/target/release/librura_client.dylib" "$OUTPUT_DIR/lib/"
-elif [ -f "$REPO_ROOT/crates/client/target/release/rura_client.dll" ]; then
-    cp "$REPO_ROOT/crates/client/target/release/rura_client.dll" "$OUTPUT_DIR/lib/"
-else
-    echo "[package_client] ERROR: Could not find compiled library"
-    exit 1
+LIB_SRC=""
+for CAND in \
+  "$REPO_ROOT/target/release/librura_client.so" \
+  "$REPO_ROOT/target/release/librura_client.dylib" \
+  "$REPO_ROOT/target/release/rura_client.dll" \
+  "$REPO_ROOT/crates/client/target/release/librura_client.so" \
+  "$REPO_ROOT/crates/client/target/release/librura_client.dylib" \
+  "$REPO_ROOT/crates/client/target/release/rura_client.dll"; do
+  if [ -f "$CAND" ]; then LIB_SRC="$CAND"; break; fi
+done
+if [ -z "$LIB_SRC" ]; then
+  echo "[package_client] ERROR: Could not find compiled library (looked in target/release and crates/client/target/release)" >&2
+  exit 1
 fi
+cp "$LIB_SRC" "$OUTPUT_DIR/lib/"
 
 echo "[package_client] Copying certificates (optional)..."
 if [ -d "$REPO_ROOT/certs" ]; then

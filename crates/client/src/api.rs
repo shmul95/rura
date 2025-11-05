@@ -19,6 +19,17 @@ use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Once};
 
+fn session_id_from_identity(id_b64: &str) -> Result<i64, String> {
+    // Derive a stable 63-bit numeric from the 256-bit base64 identity
+    let bytes = base64::decode(id_b64).map_err(|e| format!("bad id base64: {e}"))?;
+    if bytes.len() < 8 {
+        return Err("identity too short".to_string());
+    }
+    let slice: [u8; 8] = bytes[0..8].try_into().unwrap();
+    let v = u64::from_be_bytes(slice) & 0x7FFF_FFFF_FFFF_FFFF; // keep it positive
+    Ok(v as i64)
+}
+
 /// Simple Dart-friendly login response.
 #[frb]
 #[derive(Clone, Debug)]
@@ -248,16 +259,10 @@ pub fn login_tls(
     // Read initial auth_required line (ignore failures)
     let _ = read_line(&mut tls);
 
-    // Send login envelope
-    let login = AuthRequest {
-        passphrase,
-        password,
-        identity_key: None,
-    };
-    let envelope = ClientMessage {
-        command: "login".to_string(),
-        data: serde_json::to_string(&login).map_err(|e| format!("Serialize error: {e}"))?,
-    };
+    // Send login envelope with identity id only
+    let identity_id = crate::security::load_identity()?.map(|b| b.user_id).unwrap_or_default();
+    let payload = serde_json::json!({ "id": identity_id });
+    let envelope = ClientMessage { command: "login".to_string(), data: payload.to_string() };
     let mut line = serde_json::to_string(&envelope).map_err(|e| format!("Serialize error: {e}"))?;
     line.push('\n');
     tls.write_all(line.as_bytes())
@@ -271,19 +276,27 @@ pub fn login_tls(
     if wrapper.command != "auth_response" {
         return Err(format!("Unexpected command: {}", wrapper.command));
     }
-    let resp: AuthResponse = serde_json::from_str(&wrapper.data)
+    // Parse response and support identity-based field `id`
+    let resp_val: serde_json::Value = serde_json::from_str(&wrapper.data)
         .map_err(|e| format!("Invalid auth_response data: {e}"))?;
+    let resp: AuthResponse = serde_json::from_value(resp_val.clone())
+        .map_err(|e| format!("Invalid auth_response shape: {e}"))?;
+    let user_id = if let Some(uid) = resp.user_id {
+        Some(uid)
+    } else if let Some(id_str) = resp_val.get("id").and_then(|v| v.as_str()) {
+        Some(session_id_from_identity(id_str)?)
+    } else if let Some(id_local) = crate::security::load_identity()?.map(|b| b.user_id) {
+        Some(session_id_from_identity(&id_local)?)
+    } else {
+        None
+    };
 
     // Send a graceful TLS close_notify before dropping the connection so the
     // server does not report an unexpected EOF warning.
     tls.conn.send_close_notify();
     let _ = tls.flush();
 
-    Ok(LoginResponse {
-        success: resp.success,
-        message: resp.message,
-        user_id: resp.user_id,
-    })
+    Ok(LoginResponse { success: resp.success, message: resp.message, user_id })
 }
 
 /// Register a new user against the TLS-only server and return the auth response.
@@ -323,16 +336,10 @@ pub fn register_tls(
     // Read initial auth_required line (ignore failures)
     let _ = read_line(&mut tls);
 
-    // Send register envelope
-    let register = AuthRequest {
-        passphrase,
-        password,
-        identity_key: None,
-    };
-    let envelope = ClientMessage {
-        command: "register".to_string(),
-        data: serde_json::to_string(&register).map_err(|e| format!("Serialize error: {e}"))?,
-    };
+    // Send register envelope with identity id only
+    let identity_id = crate::security::load_identity()?.map(|b| b.user_id).unwrap_or_default();
+    let payload = serde_json::json!({ "id": identity_id });
+    let envelope = ClientMessage { command: "register".to_string(), data: payload.to_string() };
     let mut line = serde_json::to_string(&envelope).map_err(|e| format!("Serialize error: {e}"))?;
     line.push('\n');
     tls.write_all(line.as_bytes())
@@ -346,18 +353,25 @@ pub fn register_tls(
     if wrapper.command != "auth_response" {
         return Err(format!("Unexpected command: {}", wrapper.command));
     }
-    let resp: AuthResponse = serde_json::from_str(&wrapper.data)
+    let resp_val: serde_json::Value = serde_json::from_str(&wrapper.data)
         .map_err(|e| format!("Invalid auth_response data: {e}"))?;
+    let resp: AuthResponse = serde_json::from_value(resp_val.clone())
+        .map_err(|e| format!("Invalid auth_response shape: {e}"))?;
+    let user_id = if let Some(uid) = resp.user_id {
+        Some(uid)
+    } else if let Some(id_str) = resp_val.get("id").and_then(|v| v.as_str()) {
+        Some(session_id_from_identity(id_str)?)
+    } else if let Some(id_local) = crate::security::load_identity()?.map(|b| b.user_id) {
+        Some(session_id_from_identity(&id_local)?)
+    } else {
+        None
+    };
 
     // Graceful TLS close
     tls.conn.send_close_notify();
     let _ = tls.flush();
 
-    Ok(LoginResponse {
-        success: resp.success,
-        message: resp.message,
-        user_id: resp.user_id,
-    })
+    Ok(LoginResponse { success: resp.success, message: resp.message, user_id })
 }
 
 /// Bundle returned by login/register + history.
@@ -882,19 +896,19 @@ fn auth_over_stream(
     password: String,
 ) -> Result<LoginResponse, String> {
     let _ = read_line(tls);
-
-    // Load identity and extract user_id if available
-    let identity_key = crate::security::load_identity()?.map(|bundle| bundle.user_id);
-
-    let auth = AuthRequest {
-        passphrase,
-        password,
-        identity_key,
+    // Ensure local store is unlocked and an identity exists so we can always send identity_key
+    let _ = crate::security::unlock_local(&password);
+    let identity_key = match crate::security::load_identity()? {
+        Some(bundle) => Some(bundle.user_id),
+        None => {
+            // First run: generate identity (ed25519 pk + random user_id)
+            let bundle = crate::security::generate_and_store_identity()?;
+            Some(bundle.user_id)
+        }
     };
-    let env = ClientMessage {
-        command: command.to_string(),
-        data: serde_json::to_string(&auth).map_err(|e| format!("Serialize error: {e}"))?,
-    };
+
+    let payload = serde_json::json!({ "id": identity_key.unwrap_or_default() });
+    let env = ClientMessage { command: command.to_string(), data: payload.to_string() };
     let mut line = serde_json::to_string(&env).map_err(|e| format!("Serialize error: {e}"))?;
     line.push('\n');
     tls.write_all(line.as_bytes())
@@ -906,19 +920,20 @@ fn auth_over_stream(
     if wrapper.command != "auth_response" {
         return Err(format!("Unexpected command: {}", wrapper.command));
     }
-    let resp: AuthResponse = serde_json::from_str(&wrapper.data)
+    let resp_val: serde_json::Value = serde_json::from_str(&wrapper.data)
         .map_err(|e| format!("Invalid auth_response data: {e}"))?;
-    // Unlock local storage using the provided password when login succeeds
-    if resp.success {
-        if resp.user_id.is_some() {
-            let _ = crate::security::unlock_local(&auth.password);
-        }
-    }
-    Ok(LoginResponse {
-        success: resp.success,
-        message: resp.message,
-        user_id: resp.user_id,
-    })
+    let resp: AuthResponse = serde_json::from_value(resp_val.clone())
+        .map_err(|e| format!("Invalid auth_response shape: {e}"))?;
+    let user_id = if let Some(uid) = resp.user_id {
+        Some(uid)
+    } else if let Some(id_str) = resp_val.get("id").and_then(|v| v.as_str()) {
+        Some(session_id_from_identity(id_str)?)
+    } else if let Some(id_local) = crate::security::load_identity()?.map(|b| b.user_id) {
+        Some(session_id_from_identity(&id_local)?)
+    } else {
+        None
+    };
+    Ok(LoginResponse { success: resp.success, message: resp.message, user_id })
 }
 
 /// Login and fetch message history in one TLS session.

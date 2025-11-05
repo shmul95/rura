@@ -42,15 +42,10 @@ pub async fn send_direct_identity(
 ) -> tokio::io::Result<()> {
     if let Some(tx) = state.get_sender(&to_identity).await {
         let event = serde_json::json!({
-            // Keep numeric for legacy receivers as 0, and include identity explicitly
-            "from_user_id": 0,
             "from_identity": from_identity,
             "body": body,
         });
-        let msg = ClientMessage {
-            command: "message".to_string(),
-            data: event.to_string(),
-        };
+        let msg = ClientMessage { command: "message".to_string(), data: event.to_string() };
         let _ = tx.send(msg);
     }
     Ok(())

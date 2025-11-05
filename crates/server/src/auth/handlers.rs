@@ -3,7 +3,9 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
-use super::responses::{send_auth_error_response, send_auth_success_response};
+use super::responses::{
+    send_auth_error_response, send_auth_success_response, send_auth_success_response_identity,
+};
 use crate::models::client_message::{AuthRequest, ClientMessage};
 use crate::utils::db_utils::{authenticate_user, register_user};
 
@@ -30,7 +32,8 @@ pub async fn handle_auth_success<W>(
 where
     W: AsyncWrite + Unpin,
 {
-    send_auth_success_response(stream, 0, "Authentication successful").await?;
+    // Identity-based auth: return id string (no numeric user_id)
+    send_auth_success_response_identity(stream, &identity_key, "Authentication successful").await?;
     println!(
         "User {} authenticated successfully from {}",
         identity_key, client_addr
@@ -81,7 +84,8 @@ pub async fn handle_registration_success<W>(
 where
     W: AsyncWrite + Unpin,
 {
-    send_auth_success_response(stream, 0, "Registration successful").await?;
+    // Identity-based registration: return id string
+    send_auth_success_response_identity(stream, &identity_key, "Registration successful").await?;
     println!(
         "User {} registered successfully from {}",
         identity_key, client_addr
@@ -130,15 +134,24 @@ pub async fn handle_auth_login<W>(
 where
     W: AsyncWrite + Unpin,
 {
-    match serde_json::from_str::<AuthRequest>(&msg.data) {
-        Ok(login_data) => {
-            // Check if identity_key is provided
-            if let Some(identity_key) = login_data.identity_key {
-                // Use client-provided identity key
-                handle_auth_success(stream, client_addr, identity_key).await
-            } else {
-                // Fallback: authenticate with database (old behavior)
-                match authenticate_user(
+    match serde_json::from_str::<serde_json::Value>(&msg.data) {
+        Ok(val) => {
+            // Accept either {"id": "..."} or {"identity_key": "..."}
+            let id_field = val
+                .get("id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .or_else(|| {
+                    val.get("identity_key")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                });
+            if let Some(identity_key) = id_field {
+                return handle_auth_success(stream, client_addr, identity_key).await;
+            }
+            // Fallback to legacy DB auth if provided
+            match serde_json::from_value::<AuthRequest>(val) {
+                Ok(login_data) => match authenticate_user(
                     Arc::clone(&conn),
                     &login_data.passphrase,
                     &login_data.password,
@@ -150,7 +163,8 @@ where
                     }
                     Ok(None) => handle_auth_failure(stream).await,
                     Err(e) => handle_auth_db_error(stream, e).await,
-                }
+                },
+                Err(e) => handle_auth_parse_error(stream, client_addr, e).await,
             }
         }
         Err(e) => handle_auth_parse_error(stream, client_addr, e).await,
@@ -166,15 +180,23 @@ pub async fn handle_auth_register<W>(
 where
     W: AsyncWrite + Unpin,
 {
-    match serde_json::from_str::<AuthRequest>(&msg.data) {
-        Ok(register_data) => {
-            // Check if identity_key is provided
-            if let Some(identity_key) = register_data.identity_key {
-                // Use client-provided identity key
-                handle_registration_success(stream, client_addr, identity_key).await
-            } else {
-                // Fallback: register with database (old behavior)
-                match register_user(
+    match serde_json::from_str::<serde_json::Value>(&msg.data) {
+        Ok(val) => {
+            let id_field = val
+                .get("id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .or_else(|| {
+                    val.get("identity_key")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                });
+            if let Some(identity_key) = id_field {
+                return handle_registration_success(stream, client_addr, identity_key).await;
+            }
+            // Fallback to legacy DB registration if provided
+            match serde_json::from_value::<AuthRequest>(val) {
+                Ok(register_data) => match register_user(
                     Arc::clone(&conn),
                     &register_data.passphrase,
                     &register_data.password,
@@ -185,7 +207,8 @@ where
                         handle_registration_success(stream, client_addr, user_id.to_string()).await
                     }
                     Err(e) => handle_registration_error(stream, e).await,
-                }
+                },
+                Err(e) => handle_registration_parse_error(stream, client_addr, e).await,
             }
         }
         Err(e) => handle_registration_parse_error(stream, client_addr, e).await,

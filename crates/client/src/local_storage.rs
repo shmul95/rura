@@ -19,10 +19,10 @@ fn data_dir() -> PathBuf {
     if let Ok(custom) = std::env::var("RURA_CLIENT_DATA_DIR") {
         return PathBuf::from(custom);
     }
-    // Default: inside client crate (parent of flutter_app)
+    // Default: data/ subdirectory in current working directory (flutter_app)
     std::env::current_dir()
         .unwrap_or_else(|_| PathBuf::from("."))
-        .join("../data")
+        .join("data")
 }
 
 fn ensure_dir(path: &Path) -> Result<(), String> {
