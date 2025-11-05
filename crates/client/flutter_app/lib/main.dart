@@ -184,9 +184,9 @@ class SessionConfig {
 }
 
 class _HomePageState extends State<HomePage> {
-  final _host = TextEditingController(text: '');
-  final _port = TextEditingController(text: '0');
-  final _certPath = TextEditingController(text: '');
+  final _host = TextEditingController(text: '127.0.0.1');
+  final _port = TextEditingController(text: '8443');
+  final _certPath = TextEditingController(text: '../../certs/ca.crt');
   final _password = TextEditingController(text: 'secret');
   String _status = 'Ready';
 
@@ -391,15 +391,12 @@ class ChatListPage extends StatelessWidget {
               final pk = pkCtrl.text.trim();
               final nk = nickCtrl.text.trim();
               if (rid.isNotEmpty && pk.isNotEmpty) {
-                // TEMPORARY: Print entered identity and pubkey; wiring to storage occurs via FRB when available
-                // ignore: avoid_print
-                print('(TEMPORARY) New chat: id=$rid pubkey=$pk nickname=$nk');
                 Navigator.pop(ctx, { 'rid': rid, 'pk': pk, 'nk': nk });
               } else {
                 Navigator.pop(ctx, null);
               }
             },
-            child: const Text('Start'),
+            child: const Text('Add'),
           ),
         ],
       ),
@@ -659,17 +656,22 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
         final bodyRaw = map['body'] as String? ?? '';
         if (fromId == widget.recipientId) {
           final body = _decodeEnvelope(bodyRaw);
-          // Do not auto-add contacts; both sides must enter manually.
           final now = DateTime.now().toIso8601String();
-          final msg = HistoryMessage(
+          final peer = idToNumeric(widget.recipientId);
+          await appendLocalMessage(
+            fromUserId: peer,
+            toUserId: widget.selfUserId,
+            body: body,
+            timestamp: now,
+          );
+          setState(() => _messages.add(HistoryMessage(
             id: 0,
-            fromUserId: 0,
+            fromUserId: peer,
             toUserId: widget.selfUserId,
             body: body,
             timestamp: now,
             saved: false,
-          );
-          setState(() => _messages.add(msg));
+          )));
           if (_scroll.hasClients) {
             WidgetsBinding.instance.addPostFrameCallback((_) {
               if (_scroll.hasClients) {
@@ -707,7 +709,7 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
           userId: widget.selfUserId,
           toIdentity: widget.recipientId,
           body: body,
-          saved: false,
+          saved: null,
         );
       } catch (e) {
         final msg = e.toString();
@@ -755,7 +757,7 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
             userId: widget.selfUserId,
             toIdentity: widget.recipientId,
             body: body,
-            saved: false,
+            saved: null,
           );
         } else {
           // Show a friendly error, but do not crash UI
