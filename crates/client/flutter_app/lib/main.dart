@@ -483,7 +483,6 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
           toUserId: _selfId,
           body: body,
           timestamp: now,
-          saved: false,
         );
         _incoming.add(msg);
         final peer = from;
@@ -670,8 +669,8 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
             toUserId: widget.selfUserId,
             body: body,
             timestamp: now,
-            saved: false,
-          )));
+          );
+          setState(() => _messages.add(msg));
           if (_scroll.hasClients) {
             WidgetsBinding.instance.addPostFrameCallback((_) {
               if (_scroll.hasClients) {
@@ -747,7 +746,6 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
                   toUserId: widget.selfUserId,
                   body: body,
                   timestamp: now,
-                  saved: false,
                 )));
               }
             } catch (_) {}
@@ -781,7 +779,6 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
         toUserId: peer,
         body: text,
         timestamp: now,
-        saved: false,
       );
       setState(() {
         _messages.add(msg);
@@ -950,7 +947,6 @@ class _ChatPageState extends State<ChatPage> {
           toUserId: widget.peerUserId,
           body: text,
           timestamp: now,
-          saved: false,
         ));
         _input.clear();
       });

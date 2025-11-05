@@ -45,7 +45,10 @@ pub async fn send_direct_identity(
             "from_identity": from_identity,
             "body": body,
         });
-        let msg = ClientMessage { command: "message".to_string(), data: event.to_string() };
+        let msg = ClientMessage {
+            command: "message".to_string(),
+            data: event.to_string(),
+        };
         let _ = tx.send(msg);
     }
     Ok(())

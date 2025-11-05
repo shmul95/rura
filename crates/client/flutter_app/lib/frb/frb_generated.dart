@@ -987,15 +987,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   HistoryMessage dco_decode_history_message(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 6)
-      throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
+    if (arr.length != 5)
+      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
     return HistoryMessage(
       id: dco_decode_i_64(arr[0]),
       fromUserId: dco_decode_i_64(arr[1]),
       toUserId: dco_decode_i_64(arr[2]),
       body: dco_decode_String(arr[3]),
       timestamp: dco_decode_String(arr[4]),
-      saved: dco_decode_bool(arr[5]),
     );
   }
 
@@ -1159,14 +1158,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_toUserId = sse_decode_i_64(deserializer);
     var var_body = sse_decode_String(deserializer);
     var var_timestamp = sse_decode_String(deserializer);
-    var var_saved = sse_decode_bool(deserializer);
     return HistoryMessage(
       id: var_id,
       fromUserId: var_fromUserId,
       toUserId: var_toUserId,
       body: var_body,
       timestamp: var_timestamp,
-      saved: var_saved,
     );
   }
 
@@ -1370,7 +1367,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_i_64(self.toUserId, serializer);
     sse_encode_String(self.body, serializer);
     sse_encode_String(self.timestamp, serializer);
-    sse_encode_bool(self.saved, serializer);
   }
 
   @protected

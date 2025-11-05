@@ -847,14 +847,12 @@ impl SseDecode for crate::api::HistoryMessage {
         let mut var_toUserId = <i64>::sse_decode(deserializer);
         let mut var_body = <String>::sse_decode(deserializer);
         let mut var_timestamp = <String>::sse_decode(deserializer);
-        let mut var_saved = <bool>::sse_decode(deserializer);
         return crate::api::HistoryMessage {
             id: var_id,
             from_user_id: var_fromUserId,
             to_user_id: var_toUserId,
             body: var_body,
             timestamp: var_timestamp,
-            saved: var_saved,
         };
     }
 }
@@ -1092,7 +1090,6 @@ impl flutter_rust_bridge::IntoDart for crate::api::HistoryMessage {
             self.to_user_id.into_into_dart().into_dart(),
             self.body.into_into_dart().into_dart(),
             self.timestamp.into_into_dart().into_dart(),
-            self.saved.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -1183,7 +1180,6 @@ impl SseEncode for crate::api::HistoryMessage {
         <i64>::sse_encode(self.to_user_id, serializer);
         <String>::sse_encode(self.body, serializer);
         <String>::sse_encode(self.timestamp, serializer);
-        <bool>::sse_encode(self.saved, serializer);
     }
 }
 

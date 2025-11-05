@@ -121,6 +121,11 @@ pub fn decrypt_blob(data: &[u8]) -> Result<Vec<u8>, String> {
         .map_err(|_| "decrypt failed".to_string())
 }
 
+#[cfg(test)]
+pub(crate) fn reset_key_for_tests() {
+    *KEY.lock().unwrap() = None;
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct IdentityBundle {
     pub scheme: String,     // e.g., "ed25519-v1"

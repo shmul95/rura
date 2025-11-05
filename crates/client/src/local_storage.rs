@@ -88,12 +88,49 @@ fn init_persistent_schema(conn: &Connection) -> Result<(), String> {
             from_user_id INTEGER NOT NULL,
             to_user_id INTEGER NOT NULL,
             body TEXT NOT NULL,
-            timestamp TEXT NOT NULL,
-            saved INTEGER NOT NULL DEFAULT 0
+            timestamp TEXT NOT NULL
         )",
         [],
     )
     .map_err(|e| format!("create messages failed: {e}"))?;
+
+    // Migrate legacy schemas that still include the `saved` column.
+    {
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(messages)")
+            .map_err(|e| format!("pragma table_info messages failed: {e}"))?;
+        let mut rows = stmt
+            .query([])
+            .map_err(|e| format!("query pragma messages failed: {e}"))?;
+        let mut has_saved = false;
+        while let Some(row) = rows.next().map_err(|e| format!("row: {e}"))? {
+            let col: String = row.get(1).map_err(|e| format!("col: {e}"))?;
+            if col == "saved" {
+                has_saved = true;
+                break;
+            }
+        }
+        drop(rows);
+        if has_saved {
+            conn.execute_batch(
+                "BEGIN IMMEDIATE;
+                 DROP TABLE IF EXISTS messages_new;
+                 CREATE TABLE messages_new (
+                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                     from_user_id INTEGER NOT NULL,
+                     to_user_id INTEGER NOT NULL,
+                     body TEXT NOT NULL,
+                     timestamp TEXT NOT NULL
+                 );
+                 INSERT INTO messages_new (id, from_user_id, to_user_id, body, timestamp)
+                 SELECT id, from_user_id, to_user_id, body, timestamp FROM messages;
+                 DROP TABLE messages;
+                 ALTER TABLE messages_new RENAME TO messages;
+                 COMMIT;",
+            )
+            .map_err(|e| format!("migrate messages table failed: {e}"))?;
+        }
+    }
 
     // Note: No `settings` or `keys` tables per current requirements.
 
@@ -153,8 +190,8 @@ pub fn init_storage() -> Result<(), String> {
                 .map_err(|e| format!("attach tmp: {e}"))?;
             // Create schema in memory first (already done), then copy if tables exist
             let _ = persistent_conn.execute(
-                "INSERT INTO messages (from_user_id, to_user_id, body, timestamp, saved)
-                 SELECT from_user_id, to_user_id, body, timestamp, saved FROM disk.messages",
+                "INSERT INTO messages (from_user_id, to_user_id, body, timestamp)
+                 SELECT from_user_id, to_user_id, body, timestamp FROM disk.messages",
                 [],
             );
             let _ = persistent_conn.execute(
@@ -226,7 +263,6 @@ pub fn append_persistent_message(
     to_user_id: i64,
     body: String,
     timestamp: String,
-    saved: bool,
 ) -> Result<(), String> {
     with_store(|store| {
         store
@@ -234,8 +270,8 @@ pub fn append_persistent_message(
             .lock()
             .unwrap()
             .execute(
-                "INSERT INTO messages (from_user_id, to_user_id, body, timestamp, saved) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![from_user_id, to_user_id, body, timestamp, if saved { 1 } else { 0 }],
+                "INSERT INTO messages (from_user_id, to_user_id, body, timestamp) VALUES (?1, ?2, ?3, ?4)",
+                params![from_user_id, to_user_id, body, timestamp],
             )
             .map(|_| ())
             .map_err(|e| format!("insert persistent failed: {e}"))
@@ -252,7 +288,7 @@ pub fn load_history(limit: Option<usize>) -> Result<Vec<HistoryMessage>, String>
         // Persistent
         let persistent = store.persistent.lock().unwrap();
         let mut stmt = persistent
-            .prepare("SELECT id, from_user_id, to_user_id, body, timestamp, saved FROM messages")
+            .prepare("SELECT id, from_user_id, to_user_id, body, timestamp FROM messages")
             .map_err(|e| format!("prepare persistent query failed: {e}"))?;
         let rows = stmt
             .query_map([], |row| {
@@ -262,10 +298,6 @@ pub fn load_history(limit: Option<usize>) -> Result<Vec<HistoryMessage>, String>
                     to_user_id: row.get(2)?,
                     body: row.get(3)?,
                     timestamp: row.get(4)?,
-                    saved: {
-                        let v: i64 = row.get(5)?;
-                        v != 0
-                    },
                 })
             })
             .map_err(|e| format!("query persistent failed: {e}"))?;
@@ -286,7 +318,6 @@ pub fn load_history(limit: Option<usize>) -> Result<Vec<HistoryMessage>, String>
                     to_user_id: row.get(2)?,
                     body: row.get(3)?,
                     timestamp: row.get(4)?,
-                    saved: false,
                 })
             })
             .map_err(|e| format!("query ephemeral failed: {e}"))?;
@@ -345,8 +376,17 @@ pub fn snapshot_persistent() -> Result<(), String> {
     flush_persistent()
 }
 
+#[cfg(test)]
+pub(crate) fn reset_store_for_tests() {
+    *STORE.lock().unwrap() = None;
+}
+
 /// Add or update a contact's public key by their user identity (base64 string).
-pub fn add_contact(user_id: String, pubkey: String, nickname: Option<String>) -> Result<(), String> {
+pub fn add_contact(
+    user_id: String,
+    pubkey: String,
+    nickname: Option<String>,
+) -> Result<(), String> {
     with_store(|store| {
         store
             .persistent
@@ -393,4 +433,86 @@ pub fn list_contacts() -> Result<Vec<ContactRow>, String> {
         }
         Ok::<_, String>(out)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+    use tempfile::tempdir;
+
+    #[test]
+    fn migrate_legacy_messages_table_drops_saved_column() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute(
+            "CREATE TABLE messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                from_user_id INTEGER NOT NULL,
+                to_user_id INTEGER NOT NULL,
+                body TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                saved INTEGER NOT NULL DEFAULT 0
+            )",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO messages (from_user_id, to_user_id, body, timestamp, saved)
+             VALUES (1, 2, 'hello', '2024-01-01T00:00:00Z', 1)",
+            [],
+        )
+        .unwrap();
+
+        init_persistent_schema(&conn).unwrap();
+
+        let mut stmt = conn.prepare("PRAGMA table_info(messages)").unwrap();
+        let mut has_saved = false;
+        let mut columns = Vec::new();
+        let mut rows = stmt.query([]).unwrap();
+        while let Some(row) = rows.next().unwrap() {
+            let col: String = row.get(1).unwrap();
+            if col == "saved" {
+                has_saved = true;
+            }
+            columns.push(col);
+        }
+        assert!(!has_saved, "legacy saved column should be removed");
+        assert!(columns.contains(&"timestamp".to_string()));
+
+        let (body,): (String,) = conn
+            .query_row(
+                "SELECT body FROM messages WHERE from_user_id = 1 AND to_user_id = 2",
+                [],
+                |row| Ok((row.get(0)?)),
+            )
+            .unwrap();
+        assert_eq!(body, "hello");
+    }
+
+    #[test]
+    fn append_and_load_history_persists_messages() {
+        let temp = tempdir().unwrap();
+        std::env::set_var("RURA_CLIENT_DATA_DIR", temp.path());
+
+        crate::security::reset_key_for_tests();
+        crate::security::unlock_local("test-pass").unwrap();
+
+        reset_store_for_tests();
+        init_storage().unwrap();
+
+        append_persistent_message(10, 11, "hi".to_string(), "2024-02-02T00:00:00Z".to_string())
+            .unwrap();
+
+        let history = load_history(None).unwrap();
+        assert_eq!(history.len(), 1);
+        let entry = &history[0];
+        assert_eq!(entry.from_user_id, 10);
+        assert_eq!(entry.to_user_id, 11);
+        assert_eq!(entry.body, "hi");
+        assert_eq!(entry.timestamp, "2024-02-02T00:00:00Z");
+
+        reset_store_for_tests();
+        crate::security::reset_key_for_tests();
+        std::env::remove_var("RURA_CLIENT_DATA_DIR");
+    }
 }

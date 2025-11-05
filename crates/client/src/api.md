@@ -37,7 +37,6 @@ A Dart-friendly version of the server’s message model.
 | `to_user_id` | `i64` | Recipient ID |
 | `body` | `String` | Message body (E2EE envelope) |
 | `timestamp` | `String` | ISO timestamp |
-| `saved` | `bool` | Whether the message was saved server-side |
 
 ---
 

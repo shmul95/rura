@@ -279,7 +279,6 @@ class HistoryMessage {
   final PlatformInt64 toUserId;
   final String body;
   final String timestamp;
-  final bool saved;
 
   const HistoryMessage({
     required this.id,
@@ -287,7 +286,6 @@ class HistoryMessage {
     required this.toUserId,
     required this.body,
     required this.timestamp,
-    required this.saved,
   });
 
   @override
@@ -296,8 +294,7 @@ class HistoryMessage {
       fromUserId.hashCode ^
       toUserId.hashCode ^
       body.hashCode ^
-      timestamp.hashCode ^
-      saved.hashCode;
+      timestamp.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -308,8 +305,7 @@ class HistoryMessage {
           fromUserId == other.fromUserId &&
           toUserId == other.toUserId &&
           body == other.body &&
-          timestamp == other.timestamp &&
-          saved == other.saved;
+          timestamp == other.timestamp;
 }
 
 /// Simple Dart-friendly login response.

@@ -41,7 +41,6 @@ pub struct HistoryMessage {
     pub to_user_id: i64,
     pub body: String,
     pub timestamp: String,
-    pub saved: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

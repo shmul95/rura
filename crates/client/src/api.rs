@@ -48,7 +48,6 @@ pub struct HistoryMessage {
     pub to_user_id: i64,
     pub body: String,
     pub timestamp: String,
-    pub saved: bool,
 }
 
 // Use shared protocol models from rura_models for internal serialization.
@@ -62,7 +61,6 @@ impl From<ModelHistoryMessage> for HistoryMessage {
             to_user_id: src.to_user_id,
             body: src.body,
             timestamp: src.timestamp,
-            saved: src.saved,
         }
     }
 }
@@ -79,7 +77,6 @@ struct LocalMsg {
     to_user_id: i64,
     body: String,
     timestamp: String,
-    saved: bool,
 }
 
 fn cache_base_dir() -> PathBuf {
@@ -143,13 +140,7 @@ pub fn append_local_message(
 ) -> Result<(), String> {
     crate::local_storage::init_storage()?;
     // Persist messages to the on-disk database by default.
-    crate::local_storage::append_persistent_message(
-        from_user_id,
-        to_user_id,
-        body,
-        timestamp,
-        false,
-    )
+    crate::local_storage::append_persistent_message(from_user_id, to_user_id, body, timestamp)
 }
 
 #[frb]
@@ -279,9 +270,14 @@ pub fn login_tls(
     let _ = read_line(&mut tls);
 
     // Send login envelope with identity id only
-    let identity_id = crate::security::load_identity()?.map(|b| b.user_id).unwrap_or_default();
+    let identity_id = crate::security::load_identity()?
+        .map(|b| b.user_id)
+        .unwrap_or_default();
     let payload = serde_json::json!({ "id": identity_id });
-    let envelope = ClientMessage { command: "login".to_string(), data: payload.to_string() };
+    let envelope = ClientMessage {
+        command: "login".to_string(),
+        data: payload.to_string(),
+    };
     let mut line = serde_json::to_string(&envelope).map_err(|e| format!("Serialize error: {e}"))?;
     line.push('\n');
     tls.write_all(line.as_bytes())
@@ -315,7 +311,11 @@ pub fn login_tls(
     tls.conn.send_close_notify();
     let _ = tls.flush();
 
-    Ok(LoginResponse { success: resp.success, message: resp.message, user_id })
+    Ok(LoginResponse {
+        success: resp.success,
+        message: resp.message,
+        user_id,
+    })
 }
 
 /// Register a new user against the TLS-only server and return the auth response.
@@ -356,9 +356,14 @@ pub fn register_tls(
     let _ = read_line(&mut tls);
 
     // Send register envelope with identity id only
-    let identity_id = crate::security::load_identity()?.map(|b| b.user_id).unwrap_or_default();
+    let identity_id = crate::security::load_identity()?
+        .map(|b| b.user_id)
+        .unwrap_or_default();
     let payload = serde_json::json!({ "id": identity_id });
-    let envelope = ClientMessage { command: "register".to_string(), data: payload.to_string() };
+    let envelope = ClientMessage {
+        command: "register".to_string(),
+        data: payload.to_string(),
+    };
     let mut line = serde_json::to_string(&envelope).map_err(|e| format!("Serialize error: {e}"))?;
     line.push('\n');
     tls.write_all(line.as_bytes())
@@ -390,7 +395,11 @@ pub fn register_tls(
     tls.conn.send_close_notify();
     let _ = tls.flush();
 
-    Ok(LoginResponse { success: resp.success, message: resp.message, user_id })
+    Ok(LoginResponse {
+        success: resp.success,
+        message: resp.message,
+        user_id,
+    })
 }
 
 /// Bundle returned by login/register + history.
@@ -927,7 +936,10 @@ fn auth_over_stream(
     };
 
     let payload = serde_json::json!({ "id": identity_key.unwrap_or_default() });
-    let env = ClientMessage { command: command.to_string(), data: payload.to_string() };
+    let env = ClientMessage {
+        command: command.to_string(),
+        data: payload.to_string(),
+    };
     let mut line = serde_json::to_string(&env).map_err(|e| format!("Serialize error: {e}"))?;
     line.push('\n');
     tls.write_all(line.as_bytes())
@@ -952,7 +964,11 @@ fn auth_over_stream(
     } else {
         None
     };
-    Ok(LoginResponse { success: resp.success, message: resp.message, user_id })
+    Ok(LoginResponse {
+        success: resp.success,
+        message: resp.message,
+        user_id,
+    })
 }
 
 /// Login and fetch message history in one TLS session.
