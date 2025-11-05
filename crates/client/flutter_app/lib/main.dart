@@ -669,8 +669,7 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
             toUserId: widget.selfUserId,
             body: body,
             timestamp: now,
-          );
-          setState(() => _messages.add(msg));
+          )));
           if (_scroll.hasClients) {
             WidgetsBinding.instance.addPostFrameCallback((_) {
               if (_scroll.hasClients) {
