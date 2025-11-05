@@ -22,7 +22,7 @@ fn data_dir() -> PathBuf {
     // Default: data/ subdirectory in current working directory (flutter_app)
     std::env::current_dir()
         .unwrap_or_else(|_| PathBuf::from("."))
-        .join("data")
+        .join("../data")
 }
 
 fn ensure_dir(path: &Path) -> Result<(), String> {
@@ -48,15 +48,38 @@ fn init_persistent_schema(conn: &Connection) -> Result<(), String> {
     )
     .map_err(|e| format!("PRAGMA failed: {e}"))?;
 
-    // Contacts: two columns (user_id, pubkey)
+    // Contacts: user_id, pubkey, optional nickname
     conn.execute(
         "CREATE TABLE IF NOT EXISTS contacts (
             user_id TEXT PRIMARY KEY,
-            pubkey TEXT
+            pubkey TEXT,
+            nickname TEXT
         )",
         [],
     )
     .map_err(|e| format!("create contacts failed: {e}"))?;
+    // Add nickname column if upgrading older schema
+    {
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(contacts)")
+            .map_err(|e| format!("pragma table_info contacts failed: {e}"))?;
+        let mut rows = stmt
+            .query([])
+            .map_err(|e| format!("query pragma contacts failed: {e}"))?;
+        let mut has_nickname = false;
+        while let Some(row) = rows.next().map_err(|e| format!("row: {e}"))? {
+            let col: String = row.get(1).map_err(|e| format!("col: {e}"))?;
+            if col == "nickname" {
+                has_nickname = true;
+                break;
+            }
+        }
+        drop(rows);
+        if !has_nickname {
+            conn.execute("ALTER TABLE contacts ADD COLUMN nickname TEXT", [])
+                .map_err(|e| format!("alter contacts add nickname failed: {e}"))?;
+        }
+    }
 
     // Messages (persistent)
     conn.execute(
@@ -323,19 +346,51 @@ pub fn snapshot_persistent() -> Result<(), String> {
 }
 
 /// Add or update a contact's public key by their user identity (base64 string).
-pub fn add_contact(user_id: String, pubkey: String) -> Result<(), String> {
+pub fn add_contact(user_id: String, pubkey: String, nickname: Option<String>) -> Result<(), String> {
     with_store(|store| {
         store
             .persistent
             .lock()
             .unwrap()
             .execute(
-                "INSERT INTO contacts (user_id, pubkey) VALUES (?1, ?2)
-                 ON CONFLICT(user_id) DO UPDATE SET pubkey=excluded.pubkey",
-                params![user_id, pubkey],
+                "INSERT INTO contacts (user_id, pubkey, nickname) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(user_id) DO UPDATE SET
+                   pubkey=excluded.pubkey,
+                   nickname=COALESCE(excluded.nickname, contacts.nickname)",
+                params![user_id, pubkey, nickname],
             )
             .map(|_| ())
             .map_err(|e| format!("upsert contact failed: {e}"))
     })?;
     flush_persistent()
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub struct ContactRow {
+    pub user_id: String,
+    pub pubkey: String,
+    pub nickname: Option<String>,
+}
+
+pub fn list_contacts() -> Result<Vec<ContactRow>, String> {
+    with_store(|store| {
+        let mut out = Vec::new();
+        let conn = store.persistent.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT user_id, pubkey, nickname FROM contacts")
+            .map_err(|e| format!("prepare contacts list failed: {e}"))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(ContactRow {
+                    user_id: row.get(0)?,
+                    pubkey: row.get(1)?,
+                    nickname: row.get::<_, Option<String>>(2)?,
+                })
+            })
+            .map_err(|e| format!("query contacts failed: {e}"))?;
+        for r in rows {
+            out.push(r.map_err(|e| format!("row contacts: {e}"))?);
+        }
+        Ok::<_, String>(out)
+    })
 }

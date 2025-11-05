@@ -36,6 +36,7 @@ Future<String> getAccountPubkey() =>
 Future<void> addContact({required String userId, required String pubkey}) =>
     RustLib.instance.api.crateApiAddContact(userId: userId, pubkey: pubkey);
 
+
 /// Login to the TLS-only server and return the auth response.
 ///
 /// - `host`: e.g., "127.0.0.1" or "localhost"

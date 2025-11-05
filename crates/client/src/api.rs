@@ -182,7 +182,26 @@ pub fn get_account_pubkey() -> Result<String, String> {
 #[frb]
 pub fn add_contact(user_id: String, pubkey: String) -> Result<(), String> {
     crate::local_storage::init_storage()?;
-    crate::local_storage::add_contact(user_id, pubkey)
+    crate::local_storage::add_contact(user_id, pubkey, None)
+}
+
+/// Add or update a contact with optional nickname.
+#[frb]
+pub fn add_contact_with_nickname(
+    user_id: String,
+    pubkey: String,
+    nickname: Option<String>,
+) -> Result<(), String> {
+    crate::local_storage::init_storage()?;
+    crate::local_storage::add_contact(user_id, pubkey, nickname)
+}
+
+/// List contacts as a JSON array [{user_id, pubkey, nickname}].
+#[frb]
+pub fn list_contacts_json() -> Result<String, String> {
+    crate::local_storage::init_storage()?;
+    let rows = crate::local_storage::list_contacts()?;
+    serde_json::to_string(&rows).map_err(|e| format!("serialize contacts: {e}"))
 }
 
 fn build_root_store_from_pem(pem: &str) -> Result<RootCertStore, String> {

@@ -327,6 +327,21 @@ extension on Stream<String>? {
       (this ?? const Stream<String>.empty()).asBroadcastStream();
 }
 
+// Derive a stable numeric id from a base64 identity for local storage grouping.
+int idToNumeric(String id) {
+  try {
+    final bytes = base64.decode(id);
+    if (bytes.length >= 8) {
+      var v = 0;
+      for (var i = 0; i < 8; i++) {
+        v = (v << 8) | (bytes[i] & 0xFF);
+      }
+      return v & 0x7FFFFFFFFFFFFFFF; // positive 63-bit
+    }
+  } catch (_) {}
+  return id.hashCode;
+}
+
 class ChatListPage extends StatelessWidget {
   final HistoryBundle bundle;
   final SessionConfig session;
@@ -339,6 +354,7 @@ class ChatListPage extends StatelessWidget {
   static Future<dynamic> _promptForUserId(BuildContext context) async {
     final idCtrl = TextEditingController();
     final pkCtrl = TextEditingController();
+    final nickCtrl = TextEditingController();
     return showDialog<dynamic>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -358,6 +374,12 @@ class ChatListPage extends StatelessWidget {
                 keyboardType: TextInputType.text,
                 decoration: const InputDecoration(labelText: 'Recipient Public Key (base64)'),
               ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: nickCtrl,
+                keyboardType: TextInputType.text,
+                decoration: const InputDecoration(labelText: 'Surname (who is this person?)'),
+              ),
             ],
           ),
         ),
@@ -367,11 +389,12 @@ class ChatListPage extends StatelessWidget {
             onPressed: () {
               final rid = idCtrl.text.trim();
               final pk = pkCtrl.text.trim();
+              final nk = nickCtrl.text.trim();
               if (rid.isNotEmpty && pk.isNotEmpty) {
                 // TEMPORARY: Print entered identity and pubkey; wiring to storage occurs via FRB when available
                 // ignore: avoid_print
-                print('(TEMPORARY) New chat: id=$rid pubkey=$pk');
-                Navigator.pop(ctx, { 'rid': rid, 'pk': pk });
+                print('(TEMPORARY) New chat: id=$rid pubkey=$pk nickname=$nk');
+                Navigator.pop(ctx, { 'rid': rid, 'pk': pk, 'nk': nk });
               } else {
                 Navigator.pop(ctx, null);
               }
@@ -398,6 +421,10 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
   late final Map<int, List<HistoryMessage>> _groups;
   StreamSubscription<String>? _sub;
   final _incoming = StreamController<HistoryMessage>.broadcast();
+  Map<int, String> _nicknames = {};
+  final Map<int, String> _identityByPeer = {};
+
+  String? _reverseIdentityFor(int peer) => _identityByPeer[peer];
 
   @override
   void initState() {
@@ -409,6 +436,18 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
       _groups.putIfAbsent(peer, () => []).add(m);
     }
     _startStream();
+  }
+
+  Future<void> _reloadFromLocal() async {
+    try {
+      final list = await loadLocalHistory(limit: BigInt.from(500));
+      final groups = <int, List<HistoryMessage>>{};
+      for (final m in list) {
+        final peer = m.fromUserId == _selfId ? m.toUserId : m.fromUserId;
+        groups.putIfAbsent(peer, () => []).add(m);
+      }
+      setState(() => _groups = groups);
+    } catch (_) {}
   }
 
   void _startStream() {
@@ -470,10 +509,19 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
 
   @override
   Widget build(BuildContext context) {
-    final items = _groups.entries.toList()
+    // Merge conversations from messages with manually added contacts (no messages yet)
+    final Map<int, List<HistoryMessage>> merged = {}..addAll(_groups);
+    for (final peer in _nicknames.keys) {
+      merged.putIfAbsent(peer, () => <HistoryMessage>[]);
+    }
+    final items = merged.entries.toList()
       ..sort((a, b) {
-        final at = DateTime.tryParse(a.value.last.timestamp) ?? DateTime(0);
-        final bt = DateTime.tryParse(b.value.last.timestamp) ?? DateTime(0);
+        final at = a.value.isNotEmpty
+            ? DateTime.tryParse(a.value.last.timestamp) ?? DateTime(0)
+            : DateTime(0);
+        final bt = b.value.isNotEmpty
+            ? DateTime.tryParse(b.value.last.timestamp) ?? DateTime(0)
+            : DateTime(0);
         return bt.compareTo(at);
       });
     return Scaffold(
@@ -484,28 +532,54 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
         itemBuilder: (context, index) {
           final peerId = items[index].key;
           final msgs = items[index].value;
-          final last = msgs.last;
+          final last = msgs.isNotEmpty ? msgs.last : null;
           return ListTile(
             leading: const CircleAvatar(
               backgroundColor: kSecondary,
               foregroundColor: Colors.black,
               child: Icon(Icons.person),
             ),
-            title: Text('User $peerId'),
-            subtitle: Text(last.body, maxLines: 1, overflow: TextOverflow.ellipsis),
-            trailing: Text(_formatTime(last.timestamp), style: Theme.of(context).textTheme.bodySmall),
-            onTap: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => ChatPage(
-                    session: widget.session,
-                    selfUserId: _selfId,
-                    peerUserId: peerId,
-                    initial: msgs,
-                    inbound: _incoming.stream,
+            title: Text(_nicknames[peerId] ?? 'User $peerId'),
+            subtitle: Text(last?.body ?? '', maxLines: 1, overflow: TextOverflow.ellipsis),
+            trailing: Text(
+              last != null ? _formatTime(last.timestamp) : '',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            onTap: () async {
+              // If we have an identity for this peer (because we added the contact), open identity chat.
+              final rid = _reverseIdentityFor(peerId);
+              if (rid != null) {
+                await Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => ChatIdentityPage(
+                      session: widget.session,
+                      selfUserId: _selfId,
+                      recipientId: rid,
+                      recipientPubKey: '',
+                      incomingRaw: widget.incoming ?? openMessageStreamTls(
+                        host: widget.session.host,
+                        port: widget.session.port,
+                        caPem: widget.session.caPem,
+                        passphrase: widget.session.passphrase,
+                        password: widget.session.password,
+                      ),
+                    ),
                   ),
-                ),
-              );
+                );
+                await _reloadFromLocal();
+              } else {
+                await Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => ChatPage(
+                      session: widget.session,
+                      selfUserId: _selfId,
+                      peerUserId: peerId,
+                      initial: msgs,
+                      inbound: _incoming.stream,
+                    ),
+                  ),
+                );
+              }
             },
           );
         },
@@ -517,26 +591,21 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
           if (sel is Map && sel['rid'] is String && sel['pk'] is String) {
             final rid = sel['rid'] as String;
             final pk = sel['pk'] as String;
+            final nk = (sel['nk'] as String?)?.trim();
             try { await addContact(userId: rid, pubkey: pk); } catch (_) {}
-            Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (_) => ChatIdentityPage(
-                  session: widget.session,
-                  selfUserId: _selfId,
-                  recipientId: rid,
-                  recipientPubKey: pk,
-                  incomingRaw: widget.incoming ?? openMessageStreamTls(
-                    host: widget.session.host,
-                    port: widget.session.port,
-                    caPem: widget.session.caPem,
-                    passphrase: widget.session.passphrase,
-                    password: widget.session.password,
-                  ),
-                ),
-              ),
+            final peer = idToNumeric(rid);
+            setState(() {
+              if ((nk?.isEmpty ?? true) == false) {
+                _nicknames[peer] = nk!;
+              }
+              _identityByPeer[peer] = rid;
+              _groups.putIfAbsent(peer, () => <HistoryMessage>[]);
+            });
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Contact added: ' + (_nicknames[peer] ?? rid.substring(0, 10) + '…'))),
             );
           } else if (sel is int) {
-            Navigator.of(context).push(
+            await Navigator.of(context).push(
               MaterialPageRoute(
                 builder: (_) => ChatPage(
                   session: widget.session,
@@ -547,9 +616,14 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
                 ),
               ),
             );
+            await _reloadFromLocal();
           }
         },
-        child: const Icon(Icons.chat),
+        child: const CircleAvatar(
+          backgroundColor: kSecondary,
+          foregroundColor: Colors.black,
+          child: Icon(Icons.person_add_alt_1),
+        ),
       ),
     );
   }
@@ -572,6 +646,7 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
   bool _sending = false;
   final List<HistoryMessage> _messages = [];
   StreamSubscription<String>? _sub;
+  // Use top-level idToNumeric()
 
   @override
   void initState() {
@@ -648,7 +723,7 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
             password: widget.session.password,
           );
           _sub?.cancel();
-          _sub = stream.listen((data) {
+          _sub = stream.listen((data) async {
             try {
               final map = jsonDecode(data) as Map;
               if (map['type'] == 'auth_ok') return;
@@ -657,15 +732,21 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
               if (fromId == widget.recipientId) {
                 final body = _decodeEnvelope(bodyRaw);
                 final now = DateTime.now().toIso8601String();
-                final msg = HistoryMessage(
+                final peer = idToNumeric(widget.recipientId);
+                await appendLocalMessage(
+                  fromUserId: peer,
+                  toUserId: widget.selfUserId,
+                  body: body,
+                  timestamp: now,
+                );
+                setState(() => _messages.add(HistoryMessage(
                   id: 0,
-                  fromUserId: 0,
+                  fromUserId: peer,
                   toUserId: widget.selfUserId,
                   body: body,
                   timestamp: now,
                   saved: false,
-                );
-                setState(() => _messages.add(msg));
+                )));
               }
             } catch (_) {}
           });
@@ -685,10 +766,17 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
         }
       }
       final now = DateTime.now().toIso8601String();
+      final peer = idToNumeric(widget.recipientId);
+      await appendLocalMessage(
+        fromUserId: widget.selfUserId,
+        toUserId: peer,
+        body: text,
+        timestamp: now,
+      );
       final msg = HistoryMessage(
         id: 0,
         fromUserId: widget.selfUserId,
-        toUserId: 0,
+        toUserId: peer,
         body: text,
         timestamp: now,
         saved: false,

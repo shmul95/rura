@@ -26,7 +26,7 @@ fn data_dir() -> PathBuf {
     // Default: data/ subdirectory in current working directory (flutter_app)
     std::env::current_dir()
         .unwrap_or_else(|_| PathBuf::from("."))
-        .join("data")
+        .join("../data")
 }
 
 fn ensure_dir(path: &Path) -> Result<(), String> {
