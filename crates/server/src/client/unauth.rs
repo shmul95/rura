@@ -12,7 +12,7 @@ pub(super) async fn handle_unauthenticated_message<W>(
     conn: Arc<Mutex<Connection>>,
     client_addr: SocketAddr,
     msg: ClientMessage,
-    authenticated_user_id: &mut Option<i64>,
+    authenticated_user_id: &mut Option<String>,
 ) -> tokio::io::Result<()>
 where
     W: AsyncWrite + Unpin,

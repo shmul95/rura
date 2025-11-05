@@ -11,24 +11,30 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`
 
 Future<void> appendLocalMessage({
-  required PlatformInt64 userId,
   required PlatformInt64 fromUserId,
   required PlatformInt64 toUserId,
   required String body,
   required String timestamp,
 }) => RustLib.instance.api.crateApiAppendLocalMessage(
-  userId: userId,
   fromUserId: fromUserId,
   toUserId: toUserId,
   body: body,
   timestamp: timestamp,
 );
 
-Future<List<HistoryMessage>> loadLocalHistory({
-  required PlatformInt64 userId,
-  BigInt? limit,
-}) =>
-    RustLib.instance.api.crateApiLoadLocalHistory(userId: userId, limit: limit);
+Future<List<HistoryMessage>> loadLocalHistory({BigInt? limit}) =>
+    RustLib.instance.api.crateApiLoadLocalHistory(limit: limit);
+
+/// Get the account's 256-bit random user_id (returns base64 string).
+Future<String> getAccountId() => RustLib.instance.api.crateApiGetAccountId();
+
+/// Get the account's public key (base64).
+Future<String> getAccountPubkey() =>
+    RustLib.instance.api.crateApiGetAccountPubkey();
+
+/// Add or update a contact locally with an ID (base64) and public key (base64).
+Future<void> addContact({required String userId, required String pubkey}) =>
+    RustLib.instance.api.crateApiAddContact(userId: userId, pubkey: pubkey);
 
 /// Login to the TLS-only server and return the auth response.
 ///
@@ -125,6 +131,19 @@ Future<void> sendDirectMessageOverStream({
 }) => RustLib.instance.api.crateApiSendDirectMessageOverStream(
   userId: userId,
   toUserId: toUserId,
+  body: body,
+  saved: saved,
+);
+
+/// Send a direct message targeting a peer by identity (base64 string) using an existing stream.
+Future<void> sendDirectMessageOverStreamToIdentity({
+  required PlatformInt64 userId,
+  required String toIdentity,
+  required String body,
+  bool? saved,
+}) => RustLib.instance.api.crateApiSendDirectMessageOverStreamToIdentity(
+  userId: userId,
+  toIdentity: toIdentity,
   body: body,
   saved: saved,
 );

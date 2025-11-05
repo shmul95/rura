@@ -125,16 +125,14 @@ fn list_chat_files(user_id: i64) -> Vec<PathBuf> {
 
 #[frb]
 pub fn append_local_message(
-    user_id: i64,
     from_user_id: i64,
     to_user_id: i64,
     body: String,
     timestamp: String,
 ) -> Result<(), String> {
-    crate::local_storage::init_for_user(user_id)?;
+    crate::local_storage::init_storage()?;
     // Persist messages to the on-disk database by default.
     crate::local_storage::append_persistent_message(
-        user_id,
         from_user_id,
         to_user_id,
         body,
@@ -144,12 +142,36 @@ pub fn append_local_message(
 }
 
 #[frb]
-pub fn load_local_history(
-    user_id: i64,
-    limit: Option<usize>,
-) -> Result<Vec<HistoryMessage>, String> {
-    crate::local_storage::init_for_user(user_id)?;
-    crate::local_storage::load_history(user_id, limit)
+pub fn load_local_history(limit: Option<usize>) -> Result<Vec<HistoryMessage>, String> {
+    crate::local_storage::init_storage()?;
+    crate::local_storage::load_history(limit)
+}
+
+/// Get the account's 256-bit random user_id (returns base64 string).
+#[frb]
+pub fn get_account_id() -> Result<String, String> {
+    let identity = crate::security::load_identity()?;
+    match identity {
+        Some(bundle) => Ok(bundle.user_id),
+        None => Err("No identity found. Please register first.".to_string()),
+    }
+}
+
+/// Get the account's public key (base64).
+#[frb]
+pub fn get_account_pubkey() -> Result<String, String> {
+    let identity = crate::security::load_identity()?;
+    match identity {
+        Some(bundle) => Ok(bundle.public_b64),
+        None => Err("No identity found. Please register first.".to_string()),
+    }
+}
+
+/// Add or update a contact locally with an ID (base64) and public key (base64).
+#[frb]
+pub fn add_contact(user_id: String, pubkey: String) -> Result<(), String> {
+    crate::local_storage::init_storage()?;
+    crate::local_storage::add_contact(user_id, pubkey)
 }
 
 fn build_root_store_from_pem(pem: &str) -> Result<RootCertStore, String> {
@@ -692,6 +714,63 @@ pub fn send_direct_message_over_stream(
         .map_err(|_| "Failed to enqueue send".to_string())
 }
 
+/// Send a direct message targeting a peer by identity (base64 string) using an existing stream.
+#[frb]
+pub fn send_direct_message_over_stream_to_identity(
+    user_id: i64,
+    to_identity: String,
+    body: String,
+    saved: Option<bool>,
+) -> Result<(), String> {
+    fn is_base64ish(s: &str) -> bool {
+        !s.is_empty()
+            && s.chars().all(
+                |c| matches!(c, 'A'..='Z' | 'a'..='z' | '0'..='9' | '+' | '/' | '=' | '-' | '_'),
+            )
+    }
+    fn is_e2ee_envelope(body: &str) -> bool {
+        if !body.starts_with("v1:") {
+            return false;
+        }
+        let parts: Vec<&str> = body.split(':').collect();
+        if parts.len() != 4 {
+            return false;
+        }
+        let (_v, eph, nonce, ct) = (parts[0], parts[1], parts[2], parts[3]);
+        is_base64ish(eph) && is_base64ish(nonce) && is_base64ish(ct)
+    }
+    if !is_e2ee_envelope(&body) {
+        return Err("E2EE required: body must be an opaque v1 envelope".to_string());
+    }
+    let tx = {
+        let g = SESSIONS.lock().unwrap();
+        g.get(&user_id).cloned()
+    };
+    let Some(tx) = tx else {
+        return Err("No active stream session for user".to_string());
+    };
+
+    #[derive(serde::Serialize)]
+    struct OutgoingDMIdent {
+        to_identity: String,
+        body: String,
+        saved: Option<bool>,
+    }
+    let req = OutgoingDMIdent {
+        to_identity,
+        body,
+        saved,
+    };
+    let env = ClientMessage {
+        command: "message".to_string(),
+        data: serde_json::to_string(&req).map_err(|e| format!("Serialize error: {e}"))?,
+    };
+    let mut line = serde_json::to_string(&env).map_err(|e| format!("Serialize error: {e}"))?;
+    line.push('\n');
+    tx.send(line)
+        .map_err(|_| "Failed to enqueue send".to_string())
+}
+
 /// Publish a public key for the authenticated user via an existing stream session.
 #[frb]
 pub fn set_pubkey_over_stream(user_id: i64, pubkey: String) -> Result<(), String> {
@@ -803,10 +882,14 @@ fn auth_over_stream(
     password: String,
 ) -> Result<LoginResponse, String> {
     let _ = read_line(tls);
+
+    // Load identity and extract user_id if available
+    let identity_key = crate::security::load_identity()?.map(|bundle| bundle.user_id);
+
     let auth = AuthRequest {
         passphrase,
         password,
-        identity_key: None,
+        identity_key,
     };
     let env = ClientMessage {
         command: command.to_string(),
@@ -827,9 +910,8 @@ fn auth_over_stream(
         .map_err(|e| format!("Invalid auth_response data: {e}"))?;
     // Unlock local storage using the provided password when login succeeds
     if resp.success {
-        if let Some(uid) = resp.user_id {
-            let _ = crate::security::unlock_local(uid, &auth.password);
-            let _ = crate::local_storage::set_current_user(uid);
+        if resp.user_id.is_some() {
+            let _ = crate::security::unlock_local(&auth.password);
         }
     }
     Ok(LoginResponse {
@@ -876,19 +958,20 @@ pub fn login_and_load_local_history_tls(
     password: String,
     limit: Option<usize>,
 ) -> Result<HistoryBundle, String> {
+    // Check if data directory exists - must exist for login
+    if !crate::security::data_dir_exists() {
+        return Err("No account found. Please register first.".to_string());
+    }
+
     if host.trim().is_empty() || port == 0 {
-        // Offline unlock: use last known user id
-        let uid = crate::local_storage::get_current_user()?;
-        let Some(uid) = uid else {
-            return Err("No known local user to unlock".to_string());
-        };
-        crate::security::unlock_local(uid, &password)?;
-        crate::local_storage::init_for_user(uid)?;
-        let messages = load_local_history(uid, limit)?;
+        // Offline unlock: use existing account
+        crate::security::unlock_local(&password)?;
+        crate::local_storage::init_storage()?;
+        let messages = load_local_history(limit)?;
         return Ok(HistoryBundle {
             success: true,
             message: "Unlocked local storage".to_string(),
-            user_id: Some(uid),
+            user_id: None,
             messages,
         });
     }
@@ -899,9 +982,7 @@ pub fn login_and_load_local_history_tls(
     let _ = tls.flush();
     let mut messages = Vec::new();
     if login.success {
-        if let Some(uid) = login.user_id {
-            messages = load_local_history(uid, limit)?;
-        }
+        messages = load_local_history(limit)?;
     }
     Ok(HistoryBundle {
         success: login.success,
@@ -922,38 +1003,22 @@ pub fn register_and_load_local_history_tls(
     password: String,
     limit: Option<usize>,
 ) -> Result<HistoryBundle, String> {
+    // Check if data directory exists - must NOT exist for register
+    if crate::security::data_dir_exists() {
+        return Err("Account already exists. Please login instead.".to_string());
+    }
+
     if host.trim().is_empty() || port == 0 {
-        // Offline register: create a new local user and initialize encrypted DB
-        // Choose next user id based on existing directories
-        let users_dir = std::env::current_dir()
-            .unwrap_or_else(|_| std::path::PathBuf::from("."))
-            .join("../.cache")
-            .join("users");
-        let _ = std::fs::create_dir_all(&users_dir);
-        let mut max_id: i64 = 0;
-        if let Ok(rd) = std::fs::read_dir(&users_dir) {
-            for ent in rd.flatten() {
-                if let Some(name) = ent.file_name().to_str() {
-                    if let Ok(n) = name.parse::<i64>() {
-                        if n > max_id {
-                            max_id = n;
-                        }
-                    }
-                }
-            }
-        }
-        let new_id = max_id + 1;
-        // Derive key, init storage, generate identity, set current user, snapshot empty DB
-        crate::security::unlock_local(new_id, &password)?;
-        crate::local_storage::init_for_user(new_id)?;
-        let _ = crate::security::generate_and_store_identity(new_id)?;
-        crate::local_storage::set_current_user(new_id)?;
-        let _ = crate::local_storage::snapshot_persistent(new_id);
-        let messages = load_local_history(new_id, limit)?;
+        // Offline register: create a new local account
+        crate::security::unlock_local(&password)?;
+        crate::local_storage::init_storage()?;
+        let _ = crate::security::generate_and_store_identity()?;
+        let _ = crate::local_storage::snapshot_persistent();
+        let messages = load_local_history(limit)?;
         return Ok(HistoryBundle {
             success: true,
-            message: "Local user created".to_string(),
-            user_id: Some(new_id),
+            message: "Local account created".to_string(),
+            user_id: None,
             messages,
         });
     }
@@ -964,13 +1029,11 @@ pub fn register_and_load_local_history_tls(
     let _ = tls.flush();
     let mut messages = Vec::new();
     if reg.success {
-        if let Some(uid) = reg.user_id {
-            // Generate identity after successful server registration if missing
-            if crate::security::load_identity(uid)?.is_none() {
-                let _ = crate::security::generate_and_store_identity(uid)?;
-            }
-            messages = load_local_history(uid, limit)?;
+        // Generate identity after successful server registration if missing
+        if crate::security::load_identity()?.is_none() {
+            let _ = crate::security::generate_and_store_identity()?;
         }
+        messages = load_local_history(limit)?;
     }
     Ok(HistoryBundle {
         success: reg.success,

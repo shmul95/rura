@@ -3,7 +3,6 @@ use std::sync::{Arc, Mutex};
 
 use tokio::sync::mpsc;
 
-use crate::messaging::handlers::send_direct;
 use crate::messaging::state::AppState;
 use crate::models::client_message::ClientMessage;
 use crate::utils::db_utils::{get_user_pubkey, set_user_pubkey};
@@ -15,7 +14,7 @@ pub(super) async fn handle_client_message(
     conn: Arc<Mutex<Connection>>,
     outbound: &mpsc::UnboundedSender<ClientMessage>,
     client_addr: SocketAddr,
-    user_id: i64,
+    user_id: String,
     buffer: &[u8],
 ) -> tokio::io::Result<()> {
     let received = String::from_utf8_lossy(buffer).to_string();
@@ -37,7 +36,8 @@ pub(super) async fn handle_client_message(
                 "message" => {
                     #[derive(serde::Deserialize)]
                     struct LocalDM {
-                        to_user_id: i64,
+                        to_user_id: Option<i64>,
+                        to_identity: Option<String>,
                         body: String,
                         saved: Option<bool>,
                     }
@@ -71,13 +71,27 @@ pub(super) async fn handle_client_message(
                                 let _ = outbound.send(err);
                                 return Ok(());
                             }
-                            let req2 = crate::messaging::models::DirectMessageReq {
-                                to_user_id: req.to_user_id,
-                                body: req.body,
-                                saved: req.saved,
+                            // Determine target identity: explicit to_identity or numeric to_user_id as string
+                            let to_identity = match (req.to_identity, req.to_user_id) {
+                                (Some(id), _) => id,
+                                (None, Some(n)) => n.to_string(),
+                                (None, None) => {
+                                    let err = ClientMessage {
+                                        command: "error".to_string(),
+                                        data: "Missing to_identity/to_user_id".to_string(),
+                                    };
+                                    let _ = outbound.send(err);
+                                    return Ok(());
+                                }
                             };
-                            send_direct(Arc::clone(&state), Arc::clone(&conn), user_id, req2)
-                                .await?;
+                            crate::messaging::handlers::send_direct_identity(
+                                Arc::clone(&state),
+                                Arc::clone(&conn),
+                                user_id.clone(),
+                                to_identity,
+                                req.body,
+                            )
+                            .await?;
                         }
                         Err(_) => {
                             // Notify sender about malformed message request
@@ -123,7 +137,15 @@ pub(super) async fn handle_client_message(
                     }
                     match serde_json::from_str::<SetPkReq>(&msg.data) {
                         Ok(req) => {
-                            match set_user_pubkey(Arc::clone(&conn), user_id, &req.pubkey).await {
+                            // TEMPORARY: print identity + pubkey for manual sharing
+                            println!("(TEMPORARY) User {} set PubKey: {}", user_id, req.pubkey);
+                            // Attempt DB update only if user_id parses as numeric (legacy flow)
+                            let result = if let Ok(uid) = user_id.parse::<i64>() {
+                                set_user_pubkey(Arc::clone(&conn), uid, &req.pubkey).await
+                            } else {
+                                Ok(true)
+                            };
+                            match result {
                                 Ok(true) => {
                                     let resp = SetPkResp {
                                         success: true,

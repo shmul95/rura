@@ -1,46 +1,40 @@
 use once_cell::sync::Lazy;
 use rusqlite::{Connection, params};
-use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use crate::api::HistoryMessage;
 
-// Store one LocalStorage per user id.
-static STORES: Lazy<Mutex<HashMap<i64, LocalStorage>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+// Store a single LocalStorage instance (single account only).
+static STORE: Lazy<Mutex<Option<LocalStorage>>> = Lazy::new(|| Mutex::new(None));
 
 pub struct LocalStorage {
-    pub user_id: i64,
     pub persistent_path: PathBuf,
     persistent: Arc<Mutex<Connection>>,
     ephemeral: Arc<Mutex<Connection>>,
 }
 
-fn cache_base_dir() -> PathBuf {
-    if let Ok(custom) = std::env::var("RURA_CLIENT_CACHE_DIR") {
+fn data_dir() -> PathBuf {
+    if let Ok(custom) = std::env::var("RURA_CLIENT_DATA_DIR") {
         return PathBuf::from(custom);
     }
     // Default: inside client crate (parent of flutter_app)
     std::env::current_dir()
         .unwrap_or_else(|_| PathBuf::from("."))
-        .join("../.cache")
-}
-
-fn user_dir(user_id: i64) -> PathBuf {
-    cache_base_dir().join("users").join(user_id.to_string())
-}
-
-fn current_user_path() -> PathBuf {
-    cache_base_dir().join("current_user.json")
+        .join("../data")
 }
 
 fn ensure_dir(path: &Path) -> Result<(), String> {
     fs::create_dir_all(path).map_err(|e| format!("Failed to create dir {}: {e}", path.display()))
 }
 
-fn encrypted_db_path(user_id: i64) -> PathBuf {
-    user_dir(user_id).join("persistent.enc")
+fn encrypted_db_path() -> PathBuf {
+    data_dir().join("persistent.enc")
+}
+
+pub fn data_dir_exists() -> bool {
+    data_dir().exists()
 }
 
 fn init_persistent_schema(conn: &Connection) -> Result<(), String> {
@@ -57,7 +51,7 @@ fn init_persistent_schema(conn: &Connection) -> Result<(), String> {
     // Contacts: two columns (user_id, pubkey)
     conn.execute(
         "CREATE TABLE IF NOT EXISTS contacts (
-            user_id INTEGER PRIMARY KEY,
+            user_id TEXT PRIMARY KEY,
             pubkey TEXT
         )",
         [],
@@ -105,26 +99,28 @@ fn init_ephemeral_schema(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
-/// Ensure a LocalStorage exists for given user id.
-pub fn init_for_user(user_id: i64) -> Result<(), String> {
+/// Initialize local storage (single account only).
+pub fn init_storage() -> Result<(), String> {
     // Fast path: already initialized
-    if STORES.lock().unwrap().contains_key(&user_id) {
+    if STORE.lock().unwrap().is_some() {
         return Ok(());
     }
 
-    let dir = user_dir(user_id);
+    let dir = data_dir();
     ensure_dir(&dir)?;
-    let enc_path = encrypted_db_path(user_id);
+    let enc_path = encrypted_db_path();
+
     // Always keep persistent in memory; on disk is encrypted snapshot
     let persistent_conn = Connection::open_in_memory()
         .map_err(|e| format!("open in-memory persistent failed: {e}"))?;
     init_persistent_schema(&persistent_conn)?;
+
     // If an encrypted snapshot exists, restore it into memory
     if enc_path.exists() {
         let data = fs::read(&enc_path).map_err(|e| format!("read {}: {e}", enc_path.display()))?;
-        let plain = crate::security::decrypt_blob(user_id, &data)?;
+        let plain = crate::security::decrypt_blob(&data)?;
         // Write to a temp file, import into memory, then delete temp
-        let tmp = user_dir(user_id).join("restore.tmp.db");
+        let tmp = data_dir().join("restore.tmp.db");
         fs::write(&tmp, plain).map_err(|e| format!("write {}: {e}", tmp.display()))?;
         // Attach tmp and copy known tables
         {
@@ -164,35 +160,30 @@ pub fn init_for_user(user_id: i64) -> Result<(), String> {
         .map_err(|e| format!("wipe ephemeral failed: {e}"))?;
 
     let storage = LocalStorage {
-        user_id,
         persistent_path: enc_path,
         persistent,
         ephemeral,
     };
-    STORES.lock().unwrap().insert(user_id, storage);
+    *STORE.lock().unwrap() = Some(storage);
     Ok(())
 }
 
-fn with_store<R>(
-    user_id: i64,
-    f: impl FnOnce(&LocalStorage) -> Result<R, String>,
-) -> Result<R, String> {
-    let g = STORES.lock().unwrap();
-    let Some(store) = g.get(&user_id) else {
-        return Err("Local storage not initialized for user".to_string());
+fn with_store<R>(f: impl FnOnce(&LocalStorage) -> Result<R, String>) -> Result<R, String> {
+    let g = STORE.lock().unwrap();
+    let Some(store) = g.as_ref() else {
+        return Err("Local storage not initialized".to_string());
     };
     f(store)
 }
 
 /// Append a message to the ephemeral database (unsaved, self-destructing).
 pub fn append_ephemeral_message(
-    user_id: i64,
     from_user_id: i64,
     to_user_id: i64,
     body: String,
     timestamp: String,
 ) -> Result<(), String> {
-    with_store(user_id, |store| {
+    with_store(|store| {
         store
             .ephemeral
             .lock()
@@ -208,14 +199,13 @@ pub fn append_ephemeral_message(
 
 /// Append a message to the persistent database (saved).
 pub fn append_persistent_message(
-    user_id: i64,
     from_user_id: i64,
     to_user_id: i64,
     body: String,
     timestamp: String,
     saved: bool,
 ) -> Result<(), String> {
-    with_store(user_id, |store| {
+    with_store(|store| {
         store
             .persistent
             .lock()
@@ -228,14 +218,14 @@ pub fn append_persistent_message(
             .map_err(|e| format!("insert persistent failed: {e}"))
     })?;
     // After modification, flush to encrypted snapshot
-    flush_persistent(user_id)
+    flush_persistent()
 }
 
 /// Load merged history from both persistent and ephemeral stores, ordered by time.
-pub fn load_history(user_id: i64, limit: Option<usize>) -> Result<Vec<HistoryMessage>, String> {
+pub fn load_history(limit: Option<usize>) -> Result<Vec<HistoryMessage>, String> {
     let mut merged: Vec<HistoryMessage> = Vec::new();
 
-    with_store(user_id, |store| {
+    with_store(|store| {
         // Persistent
         let persistent = store.persistent.lock().unwrap();
         let mut stmt = persistent
@@ -295,9 +285,9 @@ pub fn load_history(user_id: i64, limit: Option<usize>) -> Result<Vec<HistoryMes
     Ok(merged)
 }
 
-/// Explicit wipe for ephemeral messages for this user.
-pub fn wipe_ephemeral(user_id: i64) -> Result<(), String> {
-    with_store(user_id, |store| {
+/// Explicit wipe for ephemeral messages.
+pub fn wipe_ephemeral() -> Result<(), String> {
+    with_store(|store| {
         store
             .ephemeral
             .lock()
@@ -308,28 +298,10 @@ pub fn wipe_ephemeral(user_id: i64) -> Result<(), String> {
     })
 }
 
-pub fn set_current_user(user_id: i64) -> Result<(), String> {
-    ensure_dir(&cache_base_dir())?;
-    let path = current_user_path();
-    let data = serde_json::to_string_pretty(&CurrentUser { user_id }).unwrap();
-    fs::write(&path, data).map_err(|e| format!("write {}: {e}", path.display()))
-}
-
-pub fn get_current_user() -> Result<Option<i64>, String> {
-    let path = current_user_path();
-    if !path.exists() {
-        return Ok(None);
-    }
-    let data = fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
-    let cur: CurrentUser =
-        serde_json::from_str(&data).map_err(|e| format!("parse {}: {e}", path.display()))?;
-    Ok(Some(cur.user_id))
-}
-
-fn flush_persistent(user_id: i64) -> Result<(), String> {
-    with_store(user_id, |store| {
+fn flush_persistent() -> Result<(), String> {
+    with_store(|store| {
         // Export in-memory DB to a temporary plain file
-        let tmp = user_dir(user_id).join("plain.tmp.db");
+        let tmp = data_dir().join("plain.tmp.db");
         let tmp_str = tmp.to_string_lossy();
         store
             .persistent
@@ -338,7 +310,7 @@ fn flush_persistent(user_id: i64) -> Result<(), String> {
             .execute(&format!("VACUUM INTO '{}';", tmp_str), [])
             .map_err(|e| format!("vacuum into failed: {e}"))?;
         let bytes = fs::read(&tmp).map_err(|e| format!("read {}: {e}", tmp.display()))?;
-        let enc = crate::security::encrypt_blob(user_id, &bytes)?;
+        let enc = crate::security::encrypt_blob(&bytes)?;
         fs::write(&store.persistent_path, enc)
             .map_err(|e| format!("write {}: {e}", store.persistent_path.display()))?;
         let _ = fs::remove_file(&tmp);
@@ -346,10 +318,24 @@ fn flush_persistent(user_id: i64) -> Result<(), String> {
     })
 }
 
-pub fn snapshot_persistent(user_id: i64) -> Result<(), String> {
-    flush_persistent(user_id)
+pub fn snapshot_persistent() -> Result<(), String> {
+    flush_persistent()
 }
-#[derive(serde::Serialize, serde::Deserialize)]
-struct CurrentUser {
-    user_id: i64,
+
+/// Add or update a contact's public key by their user identity (base64 string).
+pub fn add_contact(user_id: String, pubkey: String) -> Result<(), String> {
+    with_store(|store| {
+        store
+            .persistent
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO contacts (user_id, pubkey) VALUES (?1, ?2)
+                 ON CONFLICT(user_id) DO UPDATE SET pubkey=excluded.pubkey",
+                params![user_id, pubkey],
+            )
+            .map(|_| ())
+            .map_err(|e| format!("upsert contact failed: {e}"))
+    })?;
+    flush_persistent()
 }

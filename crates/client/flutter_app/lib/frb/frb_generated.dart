@@ -64,7 +64,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => -637505290;
+  int get rustContentHash => 227113858;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -75,13 +75,21 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
 }
 
 abstract class RustLibApi extends BaseApi {
+  Future<void> crateApiAddContact({
+    required String userId,
+    required String pubkey,
+  });
+
   Future<void> crateApiAppendLocalMessage({
-    required PlatformInt64 userId,
     required PlatformInt64 fromUserId,
     required PlatformInt64 toUserId,
     required String body,
     required String timestamp,
   });
+
+  Future<String> crateApiGetAccountId();
+
+  Future<String> crateApiGetAccountPubkey();
 
   Future<String?> crateApiGetPubkeyTls({
     required String host,
@@ -92,10 +100,7 @@ abstract class RustLibApi extends BaseApi {
     required PlatformInt64 userId,
   });
 
-  Future<List<HistoryMessage>> crateApiLoadLocalHistory({
-    required PlatformInt64 userId,
-    BigInt? limit,
-  });
+  Future<List<HistoryMessage>> crateApiLoadLocalHistory({BigInt? limit});
 
   Future<HistoryBundle> crateApiLoginAndFetchHistoryTls({
     required String host,
@@ -172,6 +177,13 @@ abstract class RustLibApi extends BaseApi {
     bool? saved,
   });
 
+  Future<void> crateApiSendDirectMessageOverStreamToIdentity({
+    required PlatformInt64 userId,
+    required String toIdentity,
+    required String body,
+    bool? saved,
+  });
+
   Future<SendResult> crateApiSendDirectMessageTls({
     required String host,
     required int port,
@@ -198,22 +210,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   });
 
   @override
-  Future<void> crateApiAppendLocalMessage({
-    required PlatformInt64 userId,
-    required PlatformInt64 fromUserId,
-    required PlatformInt64 toUserId,
-    required String body,
-    required String timestamp,
+  Future<void> crateApiAddContact({
+    required String userId,
+    required String pubkey,
   }) {
     return handler.executeNormal(
       NormalTask(
         callFfi: (port_) {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_i_64(userId, serializer);
-          sse_encode_i_64(fromUserId, serializer);
-          sse_encode_i_64(toUserId, serializer);
-          sse_encode_String(body, serializer);
-          sse_encode_String(timestamp, serializer);
+          sse_encode_String(userId, serializer);
+          sse_encode_String(pubkey, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -225,8 +231,46 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeSuccessData: sse_decode_unit,
           decodeErrorData: sse_decode_String,
         ),
+        constMeta: kCrateApiAddContactConstMeta,
+        argValues: [userId, pubkey],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiAddContactConstMeta => const TaskConstMeta(
+    debugName: "add_contact",
+    argNames: ["userId", "pubkey"],
+  );
+
+  @override
+  Future<void> crateApiAppendLocalMessage({
+    required PlatformInt64 fromUserId,
+    required PlatformInt64 toUserId,
+    required String body,
+    required String timestamp,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_i_64(fromUserId, serializer);
+          sse_encode_i_64(toUserId, serializer);
+          sse_encode_String(body, serializer);
+          sse_encode_String(timestamp, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 2,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_String,
+        ),
         constMeta: kCrateApiAppendLocalMessageConstMeta,
-        argValues: [userId, fromUserId, toUserId, body, timestamp],
+        argValues: [fromUserId, toUserId, body, timestamp],
         apiImpl: this,
       ),
     );
@@ -234,8 +278,62 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateApiAppendLocalMessageConstMeta => const TaskConstMeta(
     debugName: "append_local_message",
-    argNames: ["userId", "fromUserId", "toUserId", "body", "timestamp"],
+    argNames: ["fromUserId", "toUserId", "body", "timestamp"],
   );
+
+  @override
+  Future<String> crateApiGetAccountId() {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 3,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiGetAccountIdConstMeta,
+        argValues: [],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiGetAccountIdConstMeta =>
+      const TaskConstMeta(debugName: "get_account_id", argNames: []);
+
+  @override
+  Future<String> crateApiGetAccountPubkey() {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 4,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiGetAccountPubkeyConstMeta,
+        argValues: [],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiGetAccountPubkeyConstMeta =>
+      const TaskConstMeta(debugName: "get_account_pubkey", argNames: []);
 
   @override
   Future<String?> crateApiGetPubkeyTls({
@@ -259,7 +357,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 2,
+            funcId: 5,
             port: port_,
           );
         },
@@ -280,20 +378,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   );
 
   @override
-  Future<List<HistoryMessage>> crateApiLoadLocalHistory({
-    required PlatformInt64 userId,
-    BigInt? limit,
-  }) {
+  Future<List<HistoryMessage>> crateApiLoadLocalHistory({BigInt? limit}) {
     return handler.executeNormal(
       NormalTask(
         callFfi: (port_) {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_i_64(userId, serializer);
           sse_encode_opt_box_autoadd_usize(limit, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 3,
+            funcId: 6,
             port: port_,
           );
         },
@@ -302,16 +396,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_String,
         ),
         constMeta: kCrateApiLoadLocalHistoryConstMeta,
-        argValues: [userId, limit],
+        argValues: [limit],
         apiImpl: this,
       ),
     );
   }
 
-  TaskConstMeta get kCrateApiLoadLocalHistoryConstMeta => const TaskConstMeta(
-    debugName: "load_local_history",
-    argNames: ["userId", "limit"],
-  );
+  TaskConstMeta get kCrateApiLoadLocalHistoryConstMeta =>
+      const TaskConstMeta(debugName: "load_local_history", argNames: ["limit"]);
 
   @override
   Future<HistoryBundle> crateApiLoginAndFetchHistoryTls({
@@ -335,7 +427,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 4,
+            funcId: 7,
             port: port_,
           );
         },
@@ -378,7 +470,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 5,
+            funcId: 8,
             port: port_,
           );
         },
@@ -419,7 +511,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 6,
+            funcId: 9,
             port: port_,
           );
         },
@@ -462,7 +554,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 7,
+              funcId: 10,
               port: port_,
             );
           },
@@ -508,7 +600,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 8,
+              funcId: 11,
               port: port_,
             );
           },
@@ -553,7 +645,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 9,
+            funcId: 12,
             port: port_,
           );
         },
@@ -596,7 +688,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 10,
+            funcId: 13,
             port: port_,
           );
         },
@@ -637,7 +729,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 11,
+            funcId: 14,
             port: port_,
           );
         },
@@ -675,7 +767,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 12,
+            funcId: 15,
             port: port_,
           );
         },
@@ -694,6 +786,45 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(
         debugName: "send_direct_message_over_stream",
         argNames: ["userId", "toUserId", "body", "saved"],
+      );
+
+  @override
+  Future<void> crateApiSendDirectMessageOverStreamToIdentity({
+    required PlatformInt64 userId,
+    required String toIdentity,
+    required String body,
+    bool? saved,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_i_64(userId, serializer);
+          sse_encode_String(toIdentity, serializer);
+          sse_encode_String(body, serializer);
+          sse_encode_opt_box_autoadd_bool(saved, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 16,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiSendDirectMessageOverStreamToIdentityConstMeta,
+        argValues: [userId, toIdentity, body, saved],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSendDirectMessageOverStreamToIdentityConstMeta =>
+      const TaskConstMeta(
+        debugName: "send_direct_message_over_stream_to_identity",
+        argNames: ["userId", "toIdentity", "body", "saved"],
       );
 
   @override
@@ -722,7 +853,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 13,
+            funcId: 17,
             port: port_,
           );
         },
@@ -775,7 +906,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 14,
+            funcId: 18,
             port: port_,
           );
         },

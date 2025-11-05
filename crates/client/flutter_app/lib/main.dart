@@ -229,7 +229,7 @@ class _HomePageState extends State<HomePage> {
 
       // Load initial history from local cache to avoid re-login overwriting
       // the active stream route on the server.
-      final history = await loadLocalHistory(userId: userId, limit: BigInt.from(500));
+      final history = await loadLocalHistory(limit: BigInt.from(500));
       final bundle = HistoryBundle(
         success: true,
         message: 'OK',
@@ -316,22 +316,42 @@ class ChatListPage extends StatelessWidget {
   Widget build(BuildContext context) => _ChatListScaffold(bundle: bundle, session: session, incoming: incoming);
 
   static Future<int?> _promptForUserId(BuildContext context) async {
-    final ctrl = TextEditingController();
+    final idCtrl = TextEditingController();
+    final pkCtrl = TextEditingController();
     return showDialog<int>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('New chat'),
-        content: TextField(
-          controller: ctrl,
-          keyboardType: TextInputType.number,
-          decoration: const InputDecoration(labelText: 'User id'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: idCtrl,
+                keyboardType: TextInputType.text,
+                decoration: const InputDecoration(labelText: 'Recipient ID (base64)'),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: pkCtrl,
+                keyboardType: TextInputType.text,
+                decoration: const InputDecoration(labelText: 'Recipient Public Key (base64)'),
+              ),
+            ],
+          ),
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
           ElevatedButton(
             onPressed: () {
-              final v = int.tryParse(ctrl.text.trim());
-              Navigator.pop(ctx, v);
+              final rid = idCtrl.text.trim();
+              final pk = pkCtrl.text.trim();
+              if (rid.isNotEmpty && pk.isNotEmpty) {
+                // TEMPORARY: Print entered identity and pubkey; wiring to storage occurs via FRB when available
+                // ignore: avoid_print
+                print('(TEMPORARY) New chat: id=$rid pubkey=$pk');
+              }
+              Navigator.pop(ctx, null);
             },
             child: const Text('Start'),
           ),
@@ -389,7 +409,6 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
         final now = DateTime.now().toIso8601String();
         // Persist to local cache
         await appendLocalMessage(
-          userId: _selfId,
           fromUserId: from,
           toUserId: _selfId,
           body: body,
@@ -549,7 +568,6 @@ class _ChatPageState extends State<ChatPage> {
       final now = DateTime.now().toIso8601String();
       // Persist to local cache (sender side) as plaintext
       await appendLocalMessage(
-        userId: widget.selfUserId,
         fromUserId: widget.selfUserId,
         toUserId: widget.peerUserId,
         body: text,
@@ -716,6 +734,15 @@ extension _OfflineNav on _HomePageState {
         password: pwd,
         limit: BigInt.from(500),
       );
+      
+      // TEMPORARY: Print the generated account ID
+      try {
+        final accountId = await getAccountId();
+        print('TEMPORARY: $accountId');
+      } catch (e) {
+        print('TEMPORARY: Failed to get account ID: $e');
+      }
+      
       if (!mounted) return;
       final session = SessionConfig(host: '', port: 0, caPem: '', passphrase: '', password: pwd);
       Navigator.of(context).push(
