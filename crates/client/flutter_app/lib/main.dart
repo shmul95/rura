@@ -518,12 +518,6 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
             final rid = sel['rid'] as String;
             final pk = sel['pk'] as String;
             try { await addContact(userId: rid, pubkey: pk); } catch (_) {}
-            // Publish our own pubkey over the stream if available (best effort)
-            try {
-              final myPk = await getAccountPubkey();
-              // Requires an active stream; ignore failure
-              await setPubkeyOverStream(userId: _selfId, pubkey: myPk);
-            } catch (_) {}
             Navigator.of(context).push(
               MaterialPageRoute(
                 builder: (_) => ChatIdentityPage(
@@ -590,14 +584,7 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
         final bodyRaw = map['body'] as String? ?? '';
         if (fromId == widget.recipientId) {
           final body = _decodeEnvelope(bodyRaw);
-          if (body.startsWith('CONTACT::')) {
-            final parts = body.split('::');
-            if (parts.length >= 3) {
-              final pid = parts[1];
-              final ppk = parts[2];
-              try { await addContact(userId: pid, pubkey: ppk); } catch (_) {}
-            }
-          }
+          // Do not auto-add contacts; both sides must enter manually.
           final now = DateTime.now().toIso8601String();
           final msg = HistoryMessage(
             id: 0,
@@ -618,24 +605,7 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
         }
       } catch (_) {}
     });
-    // Best-effort contact handshake to let the peer auto-add us
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      final myId = await getAccountId();
-      final myPk = await getAccountPubkey();
-      String payload = 'CONTACT::' + myId + '::' + myPk;
-      final b64 = base64.encode(utf8.encode(payload));
-      const eph = 'UGxhaW5FcGg='; // dev placeholder
-      const nonce = 'Tm9uY2U=';    // dev placeholder
-      final body = 'v1:$eph:$nonce:$b64';
-      try {
-        await sendDirectMessageOverStreamToIdentity(
-          userId: widget.selfUserId,
-          toIdentity: widget.recipientId,
-          body: body,
-          saved: false,
-        );
-      } catch (_) {}
-    });
+    // No automatic contact handshake; require manual information exchange.
   }
 
   @override
