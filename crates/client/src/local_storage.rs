@@ -1,5 +1,5 @@
 use once_cell::sync::Lazy;
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -244,6 +244,75 @@ pub fn append_persistent_message(
     flush_persistent()
 }
 
+/// Move any ephemeral (in-memory) messages into the persistent store.
+pub fn close_conversation() -> Result<(), String> {
+    let migrated = with_store(|store| {
+        // Capture the current set of ephemeral messages while holding the lock
+        // so we can later delete the same rows by id.
+        let entries = {
+            let ephemeral = store.ephemeral.lock().unwrap();
+            let mut stmt = ephemeral
+                .prepare(
+                    "SELECT id, from_user_id, to_user_id, body, timestamp FROM ephemeral_messages",
+                )
+                .map_err(|e| format!("prepare ephemeral fetch failed: {e}"))?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                    ))
+                })
+                .map_err(|e| format!("query ephemeral fetch failed: {e}"))?;
+            let mut collected = Vec::new();
+            for row in rows {
+                collected.push(row.map_err(|e| format!("row error: {e}"))?);
+            }
+            collected
+        };
+
+        if entries.is_empty() {
+            return Ok(false);
+        }
+
+        {
+            let mut persistent = store.persistent.lock().unwrap();
+            let tx = persistent
+                .transaction()
+                .map_err(|e| format!("begin persistent transaction failed: {e}"))?;
+            for (_, from_user_id, to_user_id, body, timestamp) in &entries {
+                tx.execute(
+                    "INSERT INTO messages (from_user_id, to_user_id, body, timestamp, saved) VALUES (?1, ?2, ?3, ?4, 0)",
+                    params![from_user_id, to_user_id, body, timestamp],
+                )
+                .map_err(|e| format!("insert migrated persistent message failed: {e}"))?;
+            }
+            tx.commit()
+                .map_err(|e| format!("commit persistent transaction failed: {e}"))?;
+        }
+
+        {
+            let mut ephemeral = store.ephemeral.lock().unwrap();
+            for (id, _, _, _, _) in &entries {
+                ephemeral
+                    .execute("DELETE FROM ephemeral_messages WHERE id = ?1", params![id])
+                    .map_err(|e| format!("delete migrated ephemeral failed: {e}"))?;
+            }
+        }
+
+        Ok(true)
+    })?;
+
+    if migrated {
+        flush_persistent()?;
+    }
+
+    Ok(())
+}
+
 /// Load merged history from both persistent and ephemeral stores, ordered by time.
 pub fn load_history(limit: Option<usize>) -> Result<Vec<HistoryMessage>, String> {
     let mut merged: Vec<HistoryMessage> = Vec::new();
@@ -346,7 +415,11 @@ pub fn snapshot_persistent() -> Result<(), String> {
 }
 
 /// Add or update a contact's public key by their user identity (base64 string).
-pub fn add_contact(user_id: String, pubkey: String, nickname: Option<String>) -> Result<(), String> {
+pub fn add_contact(
+    user_id: String,
+    pubkey: String,
+    nickname: Option<String>,
+) -> Result<(), String> {
     with_store(|store| {
         store
             .persistent
