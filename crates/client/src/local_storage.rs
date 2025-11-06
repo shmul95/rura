@@ -354,8 +354,13 @@ pub fn wipe_ephemeral() -> Result<(), String> {
 
 fn flush_persistent() -> Result<(), String> {
     with_store(|store| {
-        // Export in-memory DB to a temporary plain file
-        let tmp = data_dir().join("plain.tmp.db");
+        // Export in-memory DB to a temporary plain file next to the target snapshot
+        let tmp_dir = store
+            .persistent_path
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        let tmp = tmp_dir.join("plain.tmp.db");
         let tmp_str = tmp.to_string_lossy();
         store
             .persistent
@@ -490,9 +495,14 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn append_and_load_history_persists_messages() {
-        let _temp = tempdir().unwrap();
-
+        // Isolate into a temporary data directory for this test
+        let temp = tempdir().unwrap();
+        #[allow(unused_unsafe)]
+        unsafe {
+            std::env::set_var("RURA_CLIENT_DATA_DIR", temp.path());
+        }
         crate::security::reset_key_for_tests();
         crate::security::unlock_local("test-pass").unwrap();
 
@@ -512,6 +522,5 @@ mod tests {
 
         reset_store_for_tests();
         crate::security::reset_key_for_tests();
-        // leave environment untouched
     }
 }

@@ -1089,6 +1089,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn send_direct_message_over_stream_serializes_envelope() {
         let (tx, rx) = std::sync::mpsc::channel::<String>();
         {
@@ -1107,6 +1108,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn send_direct_message_over_stream_to_identity_serializes_envelope() {
         let (tx, rx) = std::sync::mpsc::channel::<String>();
         {
@@ -1129,7 +1131,14 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn offline_login_loads_local_history() {
+        // Isolate store to a temp dir to avoid cross-test interference
+        let temp = tempfile::tempdir().expect("tempdir");
+        #[allow(unused_unsafe)]
+        unsafe {
+            std::env::set_var("RURA_CLIENT_DATA_DIR", temp.path());
+        }
         crate::security::reset_key_for_tests();
         crate::security::unlock_local("test-pass").expect("unlock");
         crate::local_storage::reset_store_for_tests();

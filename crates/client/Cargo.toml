@@ -26,3 +26,4 @@ tokio = { version = "1.47", features = ["rt-multi-thread", "macros", "net", "tim
 rcgen = "0.12"
 tempfile = "3"
 rura_server = { path = "../server" }
+serial_test = "2"

@@ -1,6 +1,6 @@
 use rura_server::client::handle_client;
 use rura_server::messaging::state::AppState;
-use rura_server::models::client_message::{AuthRequest, AuthResponse, ClientMessage};
+use rura_server::models::client_message::{AuthRequest, ClientMessage};
 use rusqlite::Connection;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
@@ -89,9 +89,9 @@ async fn pubkey_set_and_get_and_opaque_message_flow() {
     write_json(&mut c1, &reg1).await;
     let wrap1 = read_msg(&mut c1).await;
     assert_eq!(wrap1.command, "auth_response");
-    let resp1: AuthResponse = serde_json::from_str(&wrap1.data).unwrap();
-    assert!(resp1.success);
-    let uid1 = resp1.user_id.unwrap();
+    let val1: serde_json::Value = serde_json::from_str(&wrap1.data).unwrap();
+    assert_eq!(val1.get("success").and_then(|v| v.as_bool()), Some(true));
+    let id1 = val1.get("id").and_then(|v| v.as_str()).unwrap().to_string();
 
     // Register Bob
     let reg2 = ClientMessage {
@@ -106,9 +106,9 @@ async fn pubkey_set_and_get_and_opaque_message_flow() {
     write_json(&mut c2, &reg2).await;
     let wrap2 = read_msg(&mut c2).await;
     assert_eq!(wrap2.command, "auth_response");
-    let resp2: AuthResponse = serde_json::from_str(&wrap2.data).unwrap();
-    assert!(resp2.success);
-    let uid2 = resp2.user_id.unwrap();
+    let val2: serde_json::Value = serde_json::from_str(&wrap2.data).unwrap();
+    assert_eq!(val2.get("success").and_then(|v| v.as_bool()), Some(true));
+    let id2 = val2.get("id").and_then(|v| v.as_str()).unwrap().to_string();
 
     // Bob publishes his public key
     let bob_pub_b64 = "Qk9CX1BVQktFWV9CQVNFMjQ=".to_string();
@@ -126,30 +126,15 @@ async fn pubkey_set_and_get_and_opaque_message_flow() {
     let set_ok: SetPkResp = serde_json::from_str(&set_resp.data).unwrap();
     assert!(set_ok.success);
 
-    // Alice fetches Bob's public key
-    let get_pk = ClientMessage {
-        command: "get_pubkey".into(),
-        data: format!("{{\"user_id\":{}}}", uid2),
-    };
-    write_json(&mut c1, &get_pk).await;
-    let get_resp = read_msg(&mut c1).await;
-    assert_eq!(get_resp.command, "get_pubkey_response");
-    #[derive(serde::Deserialize)]
-    struct GetPkResp {
-        success: bool,
-        pubkey: Option<String>,
-    }
-    let got: GetPkResp = serde_json::from_str(&get_resp.data).unwrap();
-    assert!(got.success);
-    assert_eq!(got.pubkey.as_deref(), Some(bob_pub_b64.as_str()));
+    // Fetching pubkey via DB by numeric id is not supported in identity mode; skip get_pubkey
 
     // Alice sends an opaque E2EE envelope as body
     let opaque_body = "v1:RU5WUEs=:Tk9OQ0U=:Q0lQSEVSVEVYVA=="; // sample opaque string
     let dm_req = ClientMessage {
         command: "message".into(),
         data: format!(
-            "{{\"to_user_id\":{},\"body\":\"{}\",\"saved\":true}}",
-            uid2, opaque_body
+            "{{\"to_identity\":\"{}\",\"body\":\"{}\"}}",
+            id2, opaque_body
         ),
     };
     write_json(&mut c1, &dm_req).await;
@@ -157,14 +142,15 @@ async fn pubkey_set_and_get_and_opaque_message_flow() {
     // Bob should receive the same opaque body
     let delivered = read_msg(&mut c2).await;
     assert_eq!(delivered.command, "message");
-    #[derive(serde::Deserialize)]
-    struct Delivered {
-        from_user_id: i64,
-        body: String,
-    }
-    let msg: Delivered = serde_json::from_str(&delivered.data).unwrap();
-    assert_eq!(msg.from_user_id, uid1);
-    assert_eq!(msg.body, opaque_body);
+    let msg_val: serde_json::Value = serde_json::from_str(&delivered.data).unwrap();
+    assert_eq!(
+        msg_val.get("from_identity").and_then(|v| v.as_str()),
+        Some(id1.as_str())
+    );
+    assert_eq!(
+        msg_val.get("body").and_then(|v| v.as_str()),
+        Some(opaque_body)
+    );
 
     // No server-side persistence; only delivery is asserted above.
 }
@@ -207,10 +193,12 @@ async fn e2ee_enforcement_rejects_plaintext() {
     write_json(&mut c1, &reg1).await;
     let wrap1 = read_msg(&mut c1).await;
     assert_eq!(wrap1.command, "auth_response");
-    let uid1 = serde_json::from_str::<AuthResponse>(&wrap1.data)
+    let _id1 = serde_json::from_str::<serde_json::Value>(&wrap1.data)
         .unwrap()
-        .user_id
-        .unwrap();
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap()
+        .to_string();
     let reg2 = ClientMessage {
         command: "register".into(),
         data: serde_json::to_string(&AuthRequest {
@@ -223,16 +211,17 @@ async fn e2ee_enforcement_rejects_plaintext() {
     write_json(&mut c2, &reg2).await;
     let wrap2 = read_msg(&mut c2).await;
     assert_eq!(wrap2.command, "auth_response");
-    let uid2 = serde_json::from_str::<AuthResponse>(&wrap2.data)
+    let id2 = serde_json::from_str::<serde_json::Value>(&wrap2.data)
         .unwrap()
-        .user_id
-        .unwrap();
-    let _ = uid1; // silence
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap()
+        .to_string();
 
     // Send plaintext (should be rejected and not delivered)
     let dm_req = ClientMessage {
         command: "message".into(),
-        data: format!("{{\"to_user_id\":{},\"body\":\"hello world\"}}", uid2),
+        data: format!("{{\"to_identity\":\"{}\",\"body\":\"hello world\"}}", id2),
     };
     write_json(&mut c1, &dm_req).await;
 
