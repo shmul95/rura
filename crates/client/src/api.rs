@@ -1082,4 +1082,76 @@ mod tests {
         let line = read_line(&mut c).expect("read_line");
         assert_eq!(line, "no newline here");
     }
+
+    fn sample_envelope() -> String {
+        // v1:<b64 eph>:<b64 nonce>:<b64 ciphertext>
+        "v1:RU5WUEs=:Tk9OQ0U=:Q0lQSEVSVEVYVA==".to_string()
+    }
+
+    #[test]
+    fn send_direct_message_over_stream_serializes_envelope() {
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        {
+            let mut g = SESSIONS.lock().unwrap();
+            g.insert(42, tx);
+        }
+        let body = sample_envelope();
+        let res = send_direct_message_over_stream(42, 7, body.clone());
+        assert!(res.is_ok());
+        let line = rx.recv().expect("expected enqueued send");
+        let wrap: ClientMessage = serde_json::from_str(line.trim()).expect("json parse");
+        assert_eq!(wrap.command, "message");
+        let v: serde_json::Value = serde_json::from_str(&wrap.data).expect("payload parse");
+        assert_eq!(v.get("to_user_id").and_then(|n| n.as_i64()), Some(7));
+        assert_eq!(v.get("body").and_then(|s| s.as_str()), Some(body.as_str()));
+    }
+
+    #[test]
+    fn send_direct_message_over_stream_to_identity_serializes_envelope() {
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        {
+            let mut g = SESSIONS.lock().unwrap();
+            g.insert(99, tx);
+        }
+        let body = sample_envelope();
+        let res =
+            send_direct_message_over_stream_to_identity(99, "RID123".to_string(), body.clone());
+        assert!(res.is_ok());
+        let line = rx.recv().expect("expected enqueued send");
+        let wrap: ClientMessage = serde_json::from_str(line.trim()).expect("json parse");
+        assert_eq!(wrap.command, "message");
+        let v: serde_json::Value = serde_json::from_str(&wrap.data).expect("payload parse");
+        assert_eq!(
+            v.get("to_identity").and_then(|s| s.as_str()),
+            Some("RID123")
+        );
+        assert_eq!(v.get("body").and_then(|s| s.as_str()), Some(body.as_str()));
+    }
+
+    #[test]
+    fn offline_login_loads_local_history() {
+        crate::security::reset_key_for_tests();
+        crate::security::unlock_local("test-pass").expect("unlock");
+        crate::local_storage::reset_store_for_tests();
+        crate::local_storage::init_storage().expect("init storage");
+        crate::local_storage::append_persistent_message(
+            1,
+            2,
+            "hi".to_string(),
+            "2024-01-01T00:00:00Z".to_string(),
+        )
+        .expect("append");
+
+        let bundle = login_and_load_local_history_tls(
+            "".to_string(),
+            0,
+            "".to_string(),
+            "".to_string(),
+            "test-pass".to_string(),
+            Some(100),
+        )
+        .expect("offline load");
+        assert!(bundle.success);
+        assert!(bundle.messages.iter().any(|m| m.body == "hi"));
+    }
 }
