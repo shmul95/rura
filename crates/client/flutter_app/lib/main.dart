@@ -189,6 +189,27 @@ class _HomePageState extends State<HomePage> {
   final _certPath = TextEditingController(text: '../../certs/ca.crt');
   final _password = TextEditingController(text: 'secret');
   String _status = 'Ready';
+  bool _hasLocal = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _detectLocal();
+  }
+
+  Future<void> _detectLocal() async {
+    try {
+      // Prefer env override if present, else default to ../data (same as Rust side)
+      final envDir = Platform.environment['RURA_CLIENT_DATA_DIR'];
+      final dir = envDir != null && envDir.trim().isNotEmpty
+          ? Directory(envDir)
+          : Directory('../data');
+      final exists = await dir.exists();
+      if (mounted) setState(() => _hasLocal = exists);
+    } catch (_) {
+      if (mounted) setState(() => _hasLocal = false);
+    }
+  }
 
   Future<void> _authAndShowHistory({required bool register}) async {
     setState(() => _status = register ? 'Registering...' : 'Logging in...');
@@ -250,6 +271,8 @@ class _HomePageState extends State<HomePage> {
           builder: (_) => ChatListPage(bundle: bundle, session: session, incoming: stream),
         ),
       );
+      // Re-detect local storage for next time
+      _detectLocal();
     } catch (e) {
       setState(() => _status = '${register ? 'Register' : 'Login'} failed: $e');
     }
@@ -279,36 +302,23 @@ class _HomePageState extends State<HomePage> {
             const SizedBox(height: 8),
             TextField(controller: _certPath, decoration: const InputDecoration(labelText: 'CA cert path (e.g., certs/ca.crt)')),
             const SizedBox(height: 12),
-            Row(children: [
-              ElevatedButton.icon(
-                onPressed: () => _authAndShowHistory(register: false),
-                icon: const Icon(Icons.login),
-                label: const Text('Login (Server)'),
-              ),
-              const SizedBox(width: 12),
-              OutlinedButton.icon(
-                onPressed: () => _authAndShowHistory(register: true),
-                icon: const Icon(Icons.person_add_alt_1),
-                label: const Text('Register (Server)'),
-              ),
-            ]),
-            const Divider(height: 24),
-            // Only ask for password to unlock local DB
+            // Password to unlock local encrypted DB (used in both login and register flows)
             TextField(controller: _password, decoration: const InputDecoration(labelText: 'Password'), obscureText: true),
             const SizedBox(height: 16),
-            Row(children: [
-              ElevatedButton.icon(
-                onPressed: _unlockAndShowHistory,
-                icon: const Icon(Icons.lock_open),
-                label: const Text('Unlock Local'),
+            // Single action button: Login if local data exists; otherwise Register
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: () => _authAndShowHistory(register: !_hasLocal),
+                icon: Icon(_hasLocal ? Icons.login : Icons.person_add_alt_1),
+                label: Text(_hasLocal ? 'Login (Server)' : 'Register (Server)'),
               ),
-              const SizedBox(width: 12),
-              OutlinedButton.icon(
-                onPressed: _registerLocal,
-                icon: const Icon(Icons.app_registration),
-                label: const Text('Register Local'),
-              ),
-            ]),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              _hasLocal ? 'Existing local data found. Login will reuse it.' : 'No local data found. Register will create it.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
             const SizedBox(height: 16),
             Text(_status, style: Theme.of(context).textTheme.bodyMedium),
           ],
