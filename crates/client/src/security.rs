@@ -1,4 +1,5 @@
 use argon2::Argon2;
+use base64::{Engine as _, engine::general_purpose};
 use chacha20poly1305::XChaCha20Poly1305;
 use chacha20poly1305::XNonce;
 use chacha20poly1305::aead::{Aead, KeyInit};
@@ -52,14 +53,16 @@ fn read_or_create_salt() -> Result<Vec<u8>, String> {
             .map_err(|e| format!("read {}: {e}", cfg_path.display()))?;
         let cfg: Config = serde_json::from_str(&data)
             .map_err(|e| format!("parse {}: {e}", cfg_path.display()))?;
-        let salt = base64::decode(cfg.salt_b64).map_err(|e| format!("salt b64: {e}"))?;
+        let salt = general_purpose::STANDARD
+            .decode(cfg.salt_b64)
+            .map_err(|e| format!("salt b64: {e}"))?;
         return Ok(salt);
     }
     let mut salt = vec![0u8; 16];
     rand::thread_rng().fill_bytes(&mut salt);
     ensure_dir(&data_dir())?;
     let cfg = Config {
-        salt_b64: base64::encode(&salt),
+        salt_b64: general_purpose::STANDARD.encode(&salt),
     };
     fs::write(&cfg_path, serde_json::to_string_pretty(&cfg).unwrap())
         .map_err(|e| format!("write {}: {e}", cfg_path.display()))?;
@@ -148,9 +151,9 @@ pub fn generate_and_store_identity() -> Result<IdentityBundle, String> {
 
     let bundle = IdentityBundle {
         scheme: "ed25519-v1".to_string(),
-        public_b64: base64::encode(public),
-        pkcs8_b64: base64::encode(pkcs8.as_ref()),
-        user_id: base64::encode(&user_id_bytes),
+        public_b64: general_purpose::STANDARD.encode(public),
+        pkcs8_b64: general_purpose::STANDARD.encode(pkcs8.as_ref()),
+        user_id: general_purpose::STANDARD.encode(user_id_bytes),
     };
     let plain = serde_json::to_vec(&bundle).map_err(|e| format!("identity serialize: {e}"))?;
     let enc = encrypt_blob(&plain)?;

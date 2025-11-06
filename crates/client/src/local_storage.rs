@@ -330,11 +330,11 @@ pub fn load_history(limit: Option<usize>) -> Result<Vec<HistoryMessage>, String>
 
     // Order by (timestamp, id) and apply limit
     merged.sort_by(|a, b| a.timestamp.cmp(&b.timestamp).then_with(|| a.id.cmp(&b.id)));
-    if let Some(lim) = limit {
-        if merged.len() > lim {
-            let start = merged.len() - lim;
-            merged = merged.split_off(start);
-        }
+    if let Some(lim) = limit
+        && merged.len() > lim
+    {
+        let start = merged.len() - lim;
+        merged = merged.split_off(start);
     }
     Ok(merged)
 }
@@ -479,11 +479,11 @@ mod tests {
         assert!(!has_saved, "legacy saved column should be removed");
         assert!(columns.contains(&"timestamp".to_string()));
 
-        let (body,): (String,) = conn
+        let body: String = conn
             .query_row(
                 "SELECT body FROM messages WHERE from_user_id = 1 AND to_user_id = 2",
                 [],
-                |row| Ok((row.get(0)?)),
+                |row| row.get(0),
             )
             .unwrap();
         assert_eq!(body, "hello");
@@ -491,8 +491,7 @@ mod tests {
 
     #[test]
     fn append_and_load_history_persists_messages() {
-        let temp = tempdir().unwrap();
-        std::env::set_var("RURA_CLIENT_DATA_DIR", temp.path());
+        let _temp = tempdir().unwrap();
 
         crate::security::reset_key_for_tests();
         crate::security::unlock_local("test-pass").unwrap();
@@ -513,6 +512,6 @@ mod tests {
 
         reset_store_for_tests();
         crate::security::reset_key_for_tests();
-        std::env::remove_var("RURA_CLIENT_DATA_DIR");
+        // leave environment untouched
     }
 }

@@ -1,4 +1,5 @@
 use crate::StreamSink;
+use base64::{Engine as _, engine::general_purpose};
 use flutter_rust_bridge::frb;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
@@ -12,16 +13,17 @@ pub type ClientMessage = rura_models::client_message::ClientMessage;
 // NOTE: Keep client-local history/message structs to avoid tight coupling to rura_models.
 use rustls::pki_types::{CertificateDer, ServerName};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
-use serde::{Deserialize, Serialize};
-use std::fs;
+// serde derives are referenced via fully qualified paths in this file; no direct import needed
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
-use std::path::{Path, PathBuf};
+// no path utilities needed after removing legacy JSON cache
 use std::sync::{Arc, Once};
 
 fn session_id_from_identity(id_b64: &str) -> Result<i64, String> {
     // Derive a stable 63-bit numeric from the 256-bit base64 identity
-    let bytes = base64::decode(id_b64).map_err(|e| format!("bad id base64: {e}"))?;
+    let bytes = general_purpose::STANDARD
+        .decode(id_b64)
+        .map_err(|e| format!("bad id base64: {e}"))?;
     if bytes.len() < 8 {
         return Err("identity too short".to_string());
     }
@@ -70,66 +72,7 @@ pub type HistoryResponse = rura_models::messaging::HistoryResponse;
 
 // ---------- Local cache helpers ----------
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct LocalMsg {
-    id: i64,
-    from_user_id: i64,
-    to_user_id: i64,
-    body: String,
-    timestamp: String,
-}
-
-fn cache_base_dir() -> PathBuf {
-    if let Ok(custom) = std::env::var("RURA_CLIENT_CACHE_DIR") {
-        return PathBuf::from(custom);
-    }
-    // Default: inside client crate (parent of flutter_app)
-    std::env::current_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join("../.cache")
-}
-
-fn ensure_dir(path: &Path) -> Result<(), String> {
-    fs::create_dir_all(path).map_err(|e| format!("Failed to create dir {}: {e}", path.display()))
-}
-
-fn user_dir(user_id: i64) -> PathBuf {
-    cache_base_dir().join("users").join(user_id.to_string())
-}
-fn chats_dir(user_id: i64) -> PathBuf {
-    user_dir(user_id).join("chats")
-}
-fn chat_file(user_id: i64, peer_id: i64) -> PathBuf {
-    chats_dir(user_id).join(format!("{peer_id}.json"))
-}
-
-fn read_chat(user_id: i64, peer_id: i64) -> Result<Vec<LocalMsg>, String> {
-    let path = chat_file(user_id, peer_id);
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let data =
-        fs::read_to_string(&path).map_err(|e| format!("Read {} failed: {e}", path.display()))?;
-    let v: Vec<LocalMsg> =
-        serde_json::from_str(&data).map_err(|e| format!("Parse {} failed: {e}", path.display()))?;
-    Ok(v)
-}
-
-fn write_chat(user_id: i64, peer_id: i64, msgs: &[LocalMsg]) -> Result<(), String> {
-    let dir = chats_dir(user_id);
-    ensure_dir(&dir)?;
-    let path = chat_file(user_id, peer_id);
-    let data = serde_json::to_string_pretty(msgs).map_err(|e| format!("Serialize failed: {e}"))?;
-    fs::write(&path, data).map_err(|e| format!("Write {} failed: {e}", path.display()))
-}
-
-fn list_chat_files(user_id: i64) -> Vec<PathBuf> {
-    let dir = chats_dir(user_id);
-    match fs::read_dir(dir) {
-        Ok(rd) => rd.filter_map(|e| e.ok()).map(|e| e.path()).collect(),
-        Err(_) => Vec::new(),
-    }
-}
+// Removed legacy JSON chat cache helpers in favor of encrypted SQLite local storage.
 
 #[frb]
 pub fn append_local_message(
@@ -239,8 +182,8 @@ pub fn login_tls(
     host: String,
     port: u16,
     ca_pem: String,
-    passphrase: String,
-    password: String,
+    _passphrase: String,
+    _password: String,
 ) -> Result<LoginResponse, String> {
     // Ensure a crypto provider is installed (rustls 0.23 requires this)
     static INIT: Once = Once::new();
@@ -324,8 +267,8 @@ pub fn register_tls(
     host: String,
     port: u16,
     ca_pem: String,
-    passphrase: String,
-    password: String,
+    _passphrase: String,
+    _password: String,
 ) -> Result<LoginResponse, String> {
     // Ensure a crypto provider is installed (rustls 0.23 requires this)
     static INIT: Once = Once::new();
@@ -902,7 +845,7 @@ fn make_tls_stream(
 fn auth_over_stream(
     tls: &mut StreamOwned<ClientConnection, TcpStream>,
     command: &str,
-    passphrase: String,
+    _passphrase: String,
     password: String,
 ) -> Result<LoginResponse, String> {
     let _ = read_line(tls);

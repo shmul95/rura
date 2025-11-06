@@ -3,9 +3,7 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
-use super::responses::{
-    send_auth_error_response, send_auth_success_response, send_auth_success_response_identity,
-};
+use super::responses::{send_auth_error_response, send_auth_success_response_identity};
 use crate::models::client_message::{AuthRequest, ClientMessage};
 use crate::utils::db_utils::{authenticate_user, register_user};
 

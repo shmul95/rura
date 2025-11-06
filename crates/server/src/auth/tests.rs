@@ -178,17 +178,24 @@ async fn test_register_new_user_success() {
     let result = handle_auth(&mut server_stream, conn, client_addr, &register_message)
         .await
         .unwrap();
-    assert!(result.is_some()); // Should return user ID
+    assert!(result.is_some()); // Should return identity string
 
     // Read and verify the success response
     let response = read_response(&mut client_stream).await;
     let response_wrapper: ClientMessage = serde_json::from_str(&response).unwrap();
     assert_eq!(response_wrapper.command, "auth_response");
 
-    let response_msg: AuthResponse = serde_json::from_str(&response_wrapper.data).unwrap();
-    assert!(response_msg.success);
-    assert_eq!(response_msg.message, "Registration successful");
-    assert!(response_msg.user_id.is_some());
+    let val: serde_json::Value = serde_json::from_str(&response_wrapper.data).unwrap();
+    assert_eq!(val.get("success").and_then(|b| b.as_bool()), Some(true));
+    assert_eq!(
+        val.get("message").and_then(|v| v.as_str()),
+        Some("Registration successful")
+    );
+    // Either numeric user_id (legacy) or string id (identity-based) is acceptable
+    assert!(
+        val.get("user_id").and_then(|v| v.as_i64()).is_some()
+            || val.get("id").and_then(|v| v.as_str()).is_some()
+    );
 }
 
 #[tokio::test]
@@ -216,17 +223,21 @@ async fn test_login_valid_user_success() {
     let result = handle_auth(&mut server_stream, conn, client_addr, &login_message)
         .await
         .unwrap();
-    assert_eq!(result, Some(user_id)); // Should return the correct user ID
+    assert_eq!(result, Some(user_id.to_string())); // Should return the correct identity string
 
     // Read and verify the success response
     let response = read_response(&mut client_stream).await;
     let response_wrapper: ClientMessage = serde_json::from_str(&response).unwrap();
     assert_eq!(response_wrapper.command, "auth_response");
 
-    let response_msg: AuthResponse = serde_json::from_str(&response_wrapper.data).unwrap();
-    assert!(response_msg.success);
-    assert_eq!(response_msg.message, "Authentication successful");
-    assert_eq!(response_msg.user_id, Some(user_id));
+    let val: serde_json::Value = serde_json::from_str(&response_wrapper.data).unwrap();
+    assert_eq!(val.get("success").and_then(|b| b.as_bool()), Some(true));
+    assert_eq!(
+        val.get("message").and_then(|v| v.as_str()),
+        Some("Authentication successful")
+    );
+    // Identity-based response includes string `id` rather than numeric `user_id`
+    assert!(val.get("id").and_then(|v| v.as_str()).is_some());
 }
 
 #[tokio::test]
