@@ -157,7 +157,7 @@ If online, performs remote registration, ensures a local identity exists, and lo
 
 ## Messaging APIs
 
-### `send_direct_message_tls(host, port, ca_pem, passphrase, password, to_user_id, body, saved)`
+### `send_direct_message_tls(host, port, ca_pem, passphrase, password, to_user_id, body)`
 Performs login and sends a **direct message** in one TLS session.
 
 - Verifies that the `body` is a valid `v1:` E2EE envelope.
@@ -165,7 +165,7 @@ Performs login and sends a **direct message** in one TLS session.
 
 ---
 
-### `send_direct_message_over_stream(user_id, to_user_id, body, saved)`
+### `send_direct_message_over_stream(user_id, to_user_id, body)`
 Sends a direct message over an existing long-lived stream session.
 
 Requires that the user already has an active stream in the global `SESSIONS` map.

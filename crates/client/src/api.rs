@@ -464,7 +464,6 @@ pub fn send_direct_message_tls(
     password: String,
     to_user_id: i64,
     body: String,
-    saved: Option<bool>,
 ) -> Result<SendResult, String> {
     fn is_base64ish(s: &str) -> bool {
         !s.is_empty()
@@ -507,12 +506,10 @@ pub fn send_direct_message_tls(
     struct OutgoingDM {
         to_user_id: i64,
         body: String,
-        saved: Option<bool>,
     }
     let req = OutgoingDM {
         to_user_id,
         body,
-        saved,
     };
     let env = ClientMessage {
         command: "message".to_string(),
@@ -703,7 +700,6 @@ pub fn send_direct_message_over_stream(
     user_id: i64,
     to_user_id: i64,
     body: String,
-    saved: Option<bool>,
 ) -> Result<(), String> {
     fn is_base64ish(s: &str) -> bool {
         !s.is_empty()
@@ -739,12 +735,10 @@ pub fn send_direct_message_over_stream(
     struct OutgoingDM2 {
         to_user_id: i64,
         body: String,
-        saved: Option<bool>,
     }
     let req = OutgoingDM2 {
         to_user_id,
         body,
-        saved,
     };
     let env = ClientMessage {
         command: "message".to_string(),
@@ -762,7 +756,6 @@ pub fn send_direct_message_over_stream_to_identity(
     user_id: i64,
     to_identity: String,
     body: String,
-    saved: Option<bool>,
 ) -> Result<(), String> {
     fn is_base64ish(s: &str) -> bool {
         !s.is_empty()
@@ -796,12 +789,10 @@ pub fn send_direct_message_over_stream_to_identity(
     struct OutgoingDMIdent {
         to_identity: String,
         body: String,
-        saved: Option<bool>,
     }
     let req = OutgoingDMIdent {
         to_identity,
         body,
-        saved,
     };
     let env = ClientMessage {
         command: "message".to_string(),

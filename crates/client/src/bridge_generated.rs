@@ -649,7 +649,6 @@ fn wire__crate__api__send_direct_message_over_stream_impl(
             let api_user_id = <i64>::sse_decode(&mut deserializer);
             let api_to_user_id = <i64>::sse_decode(&mut deserializer);
             let api_body = <String>::sse_decode(&mut deserializer);
-            let api_saved = <Option<bool>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, String>((move || {
@@ -657,7 +656,6 @@ fn wire__crate__api__send_direct_message_over_stream_impl(
                         api_user_id,
                         api_to_user_id,
                         api_body,
-                        api_saved,
                     )?;
                     Ok(output_ok)
                 })())
@@ -690,7 +688,6 @@ fn wire__crate__api__send_direct_message_over_stream_to_identity_impl(
             let api_user_id = <i64>::sse_decode(&mut deserializer);
             let api_to_identity = <String>::sse_decode(&mut deserializer);
             let api_body = <String>::sse_decode(&mut deserializer);
-            let api_saved = <Option<bool>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, String>((move || {
@@ -698,7 +695,6 @@ fn wire__crate__api__send_direct_message_over_stream_to_identity_impl(
                         api_user_id,
                         api_to_identity,
                         api_body,
-                        api_saved,
                     )?;
                     Ok(output_ok)
                 })())
@@ -735,7 +731,6 @@ fn wire__crate__api__send_direct_message_tls_impl(
             let api_password = <String>::sse_decode(&mut deserializer);
             let api_to_user_id = <i64>::sse_decode(&mut deserializer);
             let api_body = <String>::sse_decode(&mut deserializer);
-            let api_saved = <Option<bool>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, String>((move || {
@@ -747,7 +742,6 @@ fn wire__crate__api__send_direct_message_tls_impl(
                         api_password,
                         api_to_user_id,
                         api_body,
-                        api_saved,
                     )?;
                     Ok(output_ok)
                 })())

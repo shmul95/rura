@@ -39,7 +39,6 @@ pub(super) async fn handle_client_message(
                         to_user_id: Option<i64>,
                         to_identity: Option<String>,
                         body: String,
-                        saved: Option<bool>,
                     }
                     fn is_base64ish(s: &str) -> bool {
                         !s.is_empty()

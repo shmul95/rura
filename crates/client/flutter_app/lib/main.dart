@@ -707,7 +707,6 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
           userId: widget.selfUserId,
           toIdentity: widget.recipientId,
           body: body,
-          saved: null,
         );
       } catch (e) {
         final msg = e.toString();
@@ -754,7 +753,6 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
             userId: widget.selfUserId,
             toIdentity: widget.recipientId,
             body: body,
-            saved: null,
           );
         } else {
           // Show a friendly error, but do not crash UI
@@ -929,7 +927,6 @@ class _ChatPageState extends State<ChatPage> {
         userId: widget.selfUserId,
         toUserId: widget.peerUserId,
         body: body,
-        saved: false,
       );
       final now = DateTime.now().toIso8601String();
       // Persist to local cache (sender side) as plaintext

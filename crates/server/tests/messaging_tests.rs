@@ -39,7 +39,6 @@ async fn test_send_direct_to_online_user_delivers_message() {
     let req = DirectMessageReq {
         to_user_id: bob_id,
         body: "hello world".to_string(),
-        saved: None,
     };
     send_direct(Arc::clone(&state), Arc::clone(&conn), alice_id, req)
         .await
@@ -91,7 +90,6 @@ async fn test_send_direct_to_unknown_user_sends_nothing() {
     let req = DirectMessageReq {
         to_user_id: unknown_user_id,
         body: "are you there?".to_string(),
-        saved: None,
     };
     send_direct(Arc::clone(&state), Arc::clone(&conn), from_user_id, req)
         .await

@@ -174,14 +174,12 @@ abstract class RustLibApi extends BaseApi {
     required PlatformInt64 userId,
     required PlatformInt64 toUserId,
     required String body,
-    bool? saved,
   });
 
   Future<void> crateApiSendDirectMessageOverStreamToIdentity({
     required PlatformInt64 userId,
     required String toIdentity,
     required String body,
-    bool? saved,
   });
 
   Future<SendResult> crateApiSendDirectMessageTls({
@@ -192,7 +190,6 @@ abstract class RustLibApi extends BaseApi {
     required String password,
     required PlatformInt64 toUserId,
     required String body,
-    bool? saved,
   });
 
   Future<void> crateApiSetPubkeyOverStream({
@@ -754,7 +751,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required PlatformInt64 userId,
     required PlatformInt64 toUserId,
     required String body,
-    bool? saved,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -763,7 +759,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_i_64(userId, serializer);
           sse_encode_i_64(toUserId, serializer);
           sse_encode_String(body, serializer);
-          sse_encode_opt_box_autoadd_bool(saved, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -776,7 +771,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_String,
         ),
         constMeta: kCrateApiSendDirectMessageOverStreamConstMeta,
-        argValues: [userId, toUserId, body, saved],
+        argValues: [userId, toUserId, body],
         apiImpl: this,
       ),
     );
@@ -785,7 +780,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiSendDirectMessageOverStreamConstMeta =>
       const TaskConstMeta(
         debugName: "send_direct_message_over_stream",
-        argNames: ["userId", "toUserId", "body", "saved"],
+        argNames: ["userId", "toUserId", "body"],
       );
 
   @override
@@ -793,7 +788,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required PlatformInt64 userId,
     required String toIdentity,
     required String body,
-    bool? saved,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -802,7 +796,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_i_64(userId, serializer);
           sse_encode_String(toIdentity, serializer);
           sse_encode_String(body, serializer);
-          sse_encode_opt_box_autoadd_bool(saved, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -815,7 +808,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_String,
         ),
         constMeta: kCrateApiSendDirectMessageOverStreamToIdentityConstMeta,
-        argValues: [userId, toIdentity, body, saved],
+        argValues: [userId, toIdentity, body],
         apiImpl: this,
       ),
     );
@@ -824,7 +817,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiSendDirectMessageOverStreamToIdentityConstMeta =>
       const TaskConstMeta(
         debugName: "send_direct_message_over_stream_to_identity",
-        argNames: ["userId", "toIdentity", "body", "saved"],
+        argNames: ["userId", "toIdentity", "body"],
       );
 
   @override
@@ -836,7 +829,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required String password,
     required PlatformInt64 toUserId,
     required String body,
-    bool? saved,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -849,7 +841,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_String(password, serializer);
           sse_encode_i_64(toUserId, serializer);
           sse_encode_String(body, serializer);
-          sse_encode_opt_box_autoadd_bool(saved, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -870,7 +861,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           password,
           toUserId,
           body,
-          saved,
         ],
         apiImpl: this,
       ),
@@ -888,7 +878,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           "password",
           "toUserId",
           "body",
-          "saved",
         ],
       );
 

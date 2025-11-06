@@ -81,7 +81,6 @@ Future<SendResult> sendDirectMessageTls({
   required String password,
   required PlatformInt64 toUserId,
   required String body,
-  bool? saved,
 }) => RustLib.instance.api.crateApiSendDirectMessageTls(
   host: host,
   port: port,
@@ -90,7 +89,6 @@ Future<SendResult> sendDirectMessageTls({
   password: password,
   toUserId: toUserId,
   body: body,
-  saved: saved,
 );
 
 Stream<String> openMessageStreamTls({
@@ -128,12 +126,10 @@ Future<void> sendDirectMessageOverStream({
   required PlatformInt64 userId,
   required PlatformInt64 toUserId,
   required String body,
-  bool? saved,
 }) => RustLib.instance.api.crateApiSendDirectMessageOverStream(
   userId: userId,
   toUserId: toUserId,
   body: body,
-  saved: saved,
 );
 
 /// Send a direct message targeting a peer by identity (base64 string) using an existing stream.
@@ -141,12 +137,10 @@ Future<void> sendDirectMessageOverStreamToIdentity({
   required PlatformInt64 userId,
   required String toIdentity,
   required String body,
-  bool? saved,
 }) => RustLib.instance.api.crateApiSendDirectMessageOverStreamToIdentity(
   userId: userId,
   toIdentity: toIdentity,
   body: body,
-  saved: saved,
 );
 
 /// Publish a public key for the authenticated user via an existing stream session.
