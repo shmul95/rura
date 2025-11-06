@@ -462,12 +462,12 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
           // Already handled by HomePage; ignore here
           return;
         }
-        if (map.containsKey('from_identity')) {
-          // Identity-based events are handled in ChatIdentityPage
-          return;
-        }
-        final from = map['from_user_id'] as int;
-        final bodyRaw = map['body'] as String;
+        // Support both numeric and identity-based events
+        final bool isIdentity = map.containsKey('from_identity');
+        final int from = isIdentity
+            ? idToNumeric((map['from_identity'] ?? '').toString())
+            : (map['from_user_id'] as int);
+        final bodyRaw = map['body'] as String? ?? '';
         final body = _decodeEnvelope(bodyRaw);
         final now = DateTime.now().toIso8601String();
         // Persist to local cache
