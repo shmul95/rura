@@ -7,6 +7,7 @@ use crate::messaging::state::AppState;
 use crate::models::client_message::ClientMessage;
 use crate::utils::db_utils::{get_user_pubkey, set_user_pubkey};
 use crate::utils::debug::debug_io_enabled;
+use crate::webrtc;
 use rusqlite::Connection;
 
 pub(super) async fn handle_client_message(
@@ -97,6 +98,51 @@ pub(super) async fn handle_client_message(
                             let err = ClientMessage {
                                 command: "error".to_string(),
                                 data: "Invalid message format".to_string(),
+                            };
+                            let _ = outbound.send(err);
+                        }
+                    }
+                }
+                "rtc_offer" => {
+                    match serde_json::from_str::<rura_models::webrtc::RtcOffer>(&msg.data) {
+                        Ok(mut offer) => {
+                            offer.from_user_id = user_id.parse().unwrap_or_default();
+                            webrtc::process_offer(Arc::clone(&state), offer).await;
+                        }
+                        Err(_) => {
+                            let err = ClientMessage {
+                                command: "error".to_string(),
+                                data: "Invalid rtc_offer format".to_string(),
+                            };
+                            let _ = outbound.send(err);
+                        }
+                    }
+                }
+                "rtc_answer" => {
+                    match serde_json::from_str::<rura_models::webrtc::RtcAnswer>(&msg.data) {
+                        Ok(mut answer) => {
+                            answer.from_user_id = user_id.parse().unwrap_or_default();
+                            webrtc::process_answer(Arc::clone(&state), answer).await;
+                        }
+                        Err(_) => {
+                            let err = ClientMessage {
+                                command: "error".to_string(),
+                                data: "Invalid rtc_answer format".to_string(),
+                            };
+                            let _ = outbound.send(err);
+                        }
+                    }
+                }
+                "rtc_ice" => {
+                    match serde_json::from_str::<rura_models::webrtc::IceCandidate>(&msg.data) {
+                        Ok(mut ice) => {
+                            ice.from_user_id = user_id.parse().unwrap_or_default();
+                            webrtc::process_ice(Arc::clone(&state), ice).await;
+                        }
+                        Err(_) => {
+                            let err = ClientMessage {
+                                command: "error".to_string(),
+                                data: "Invalid rtc_ice format".to_string(),
                             };
                             let _ = outbound.send(err);
                         }

@@ -10,6 +10,7 @@ use rura_server::utils::db_utils::init_db;
 use rura_server::utils::debug::set_debug_io;
 use rura_server::utils::get_local_ip::get_local_ip;
 use rura_server::utils::tls::make_tls_acceptor;
+use rura_server::webrtc;
 
 #[tokio::main]
 async fn main() -> tokio::io::Result<()> {
@@ -29,6 +30,9 @@ async fn main() -> tokio::io::Result<()> {
 
     // Set debug I/O logging flag
     set_debug_io(args.debug_io);
+
+    // Register WebRTC signaling module (skeleton)
+    webrtc::register();
 
     // Build TLS acceptor (TLS-only server)
     let tls_acceptor: TlsAcceptor = make_tls_acceptor(&args.tls_cert, &args.tls_key)

@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use crate::models::client_message::ClientMessage;
+use crate::webrtc;
 
 use super::models::DirectMessageReq;
 use super::state::AppState;
@@ -13,6 +14,10 @@ pub async fn send_direct(
     from_user_id: i64,
     req: DirectMessageReq,
 ) -> tokio::io::Result<()> {
+    // If an RTC session is active between peers, do not relay over TCP/TLS.
+    if webrtc::has_active_session(from_user_id, req.to_user_id) {
+        return Ok(());
+    }
     // No server-side persistence: messages are stored only on clients.
     if let Some(tx) = state.get_sender(&req.to_user_id.to_string()).await {
         let event = serde_json::json!({

@@ -17,6 +17,7 @@ use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
 // no path utilities needed after removing legacy JSON cache
+use crate::webrtc;
 use std::sync::{Arc, Once};
 
 fn session_id_from_identity(id_b64: &str) -> Result<i64, String> {
@@ -472,7 +473,7 @@ pub fn send_direct_message_tls(
 /// Keep a TLS session open and stream incoming direct messages as JSON payloads.
 /// Emits the `data` contents of `{"command":"message","data":...}` lines.
 #[frb]
-static SESSIONS: Lazy<std::sync::Mutex<HashMap<i64, Sender<String>>>> =
+pub(crate) static SESSIONS: Lazy<std::sync::Mutex<HashMap<i64, Sender<String>>>> =
     Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
 
 pub fn open_message_stream_tls(
@@ -502,6 +503,9 @@ pub fn open_message_stream_tls(
 
     // Channel for outgoing writes from FRB API
     let (tx, rx): (Sender<String>, Receiver<String>) = mpsc::channel();
+    // Channel for inbound RTC messages to forward to sink
+    let (rtc_tx, rtc_rx): (Sender<String>, Receiver<String>) = mpsc::channel();
+    crate::webrtc::register_inbound_sink(user_id, rtc_tx);
     {
         let mut g = SESSIONS.lock().unwrap();
         g.insert(user_id, tx);
@@ -518,6 +522,9 @@ pub fn open_message_stream_tls(
                 let _ = tls.write_all(line.as_bytes());
                 let _ = tls.flush();
             }
+            while let Ok(dc_msg) = rtc_rx.try_recv() {
+                let _ = sink.add(dc_msg);
+            }
 
             // 2) Attempt to read incoming data
             match tls.read(&mut buf) {
@@ -531,8 +538,38 @@ pub fn open_message_stream_tls(
                             .to_string();
                         #[allow(clippy::collapsible_if)]
                         if let Ok(wrapper) = serde_json::from_str::<ClientMessage>(&line) {
-                            if wrapper.command == "message" {
-                                let _ = sink.add(wrapper.data);
+                            match wrapper.command.as_str() {
+                                "message" => {
+                                    let _ = sink.add(wrapper.data);
+                                }
+                                "rtc_offer" => {
+                                    if let Ok(ofr) =
+                                        serde_json::from_str::<rura_models::webrtc::RtcOffer>(
+                                            &wrapper.data,
+                                        )
+                                    {
+                                        let _ = webrtc::on_remote_offer(user_id, ofr);
+                                    }
+                                }
+                                "rtc_answer" => {
+                                    if let Ok(ans) =
+                                        serde_json::from_str::<rura_models::webrtc::RtcAnswer>(
+                                            &wrapper.data,
+                                        )
+                                    {
+                                        let _ = webrtc::on_remote_answer(user_id, ans);
+                                    }
+                                }
+                                "rtc_ice" => {
+                                    if let Ok(ice) =
+                                        serde_json::from_str::<rura_models::webrtc::IceCandidate>(
+                                            &wrapper.data,
+                                        )
+                                    {
+                                        let _ = webrtc::on_remote_ice(user_id, ice);
+                                    }
+                                }
+                                _ => {}
                             }
                         }
                     }
@@ -586,6 +623,9 @@ pub fn open_message_stream_register_tls(
 
     // Channel for outgoing writes from FRB API
     let (tx, rx): (Sender<String>, Receiver<String>) = mpsc::channel();
+    // Channel for inbound RTC messages to forward to sink
+    let (rtc_tx, rtc_rx): (Sender<String>, Receiver<String>) = mpsc::channel();
+    crate::webrtc::register_inbound_sink(user_id, rtc_tx);
     {
         let mut g = SESSIONS.lock().unwrap();
         g.insert(user_id, tx);
@@ -601,6 +641,12 @@ pub fn open_message_stream_register_tls(
                 let _ = tls.write_all(line.as_bytes());
                 let _ = tls.flush();
             }
+            while let Ok(dc_msg) = rtc_rx.try_recv() {
+                let _ = sink.add(dc_msg);
+            }
+            while let Ok(dc_msg) = rtc_rx.try_recv() {
+                let _ = sink.add(dc_msg);
+            }
             match tls.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
@@ -610,8 +656,38 @@ pub fn open_message_stream_register_tls(
                         let line = String::from_utf8_lossy(&line[..line.len().saturating_sub(1)])
                             .to_string();
                         if let Ok(wrapper) = serde_json::from_str::<ClientMessage>(&line) {
-                            if wrapper.command == "message" {
-                                let _ = sink.add(wrapper.data);
+                            match wrapper.command.as_str() {
+                                "message" => {
+                                    let _ = sink.add(wrapper.data);
+                                }
+                                "rtc_offer" => {
+                                    if let Ok(ofr) =
+                                        serde_json::from_str::<rura_models::webrtc::RtcOffer>(
+                                            &wrapper.data,
+                                        )
+                                    {
+                                        let _ = webrtc::on_remote_offer(user_id, ofr);
+                                    }
+                                }
+                                "rtc_answer" => {
+                                    if let Ok(ans) =
+                                        serde_json::from_str::<rura_models::webrtc::RtcAnswer>(
+                                            &wrapper.data,
+                                        )
+                                    {
+                                        let _ = webrtc::on_remote_answer(user_id, ans);
+                                    }
+                                }
+                                "rtc_ice" => {
+                                    if let Ok(ice) =
+                                        serde_json::from_str::<rura_models::webrtc::IceCandidate>(
+                                            &wrapper.data,
+                                        )
+                                    {
+                                        let _ = webrtc::on_remote_ice(user_id, ice);
+                                    }
+                                }
+                                _ => {}
                             }
                         }
                     }
@@ -664,6 +740,10 @@ pub fn send_direct_message_over_stream(
     if !is_e2ee_envelope(&body) {
         return Err("E2EE required: body must be an opaque v1 envelope".to_string());
     }
+    // Try WebRTC first when an RTC channel to the numeric id is open
+    if crate::webrtc::is_channel_open(to_user_id) {
+        return crate::webrtc::send_over_dc(to_user_id, body);
+    }
     let tx = {
         let g = SESSIONS.lock().unwrap();
         g.get(&user_id).cloned()
@@ -713,6 +793,13 @@ pub fn send_direct_message_over_stream_to_identity(
     }
     if !is_e2ee_envelope(&body) {
         return Err("E2EE required: body must be an opaque v1 envelope".to_string());
+    }
+    // Try WebRTC first; if no channel, kick off signaling and fall back
+    let remote_id = crate::webrtc::ensure_offer_to_identity(user_id, &to_identity)
+        .and_then(|_| Ok(crate::webrtc::session_id_from_identity(&to_identity).unwrap_or_default()))
+        .unwrap_or_else(|_| 0);
+    if remote_id != 0 && crate::webrtc::is_channel_open(remote_id) {
+        return crate::webrtc::send_over_dc(remote_id, body);
     }
     let tx = {
         let g = SESSIONS.lock().unwrap();
