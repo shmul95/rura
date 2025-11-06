@@ -552,6 +552,7 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
                       selfUserId: _selfId,
                       recipientId: rid,
                       recipientPubKey: '',
+                      recipientName: _nicknames[peerId],
                       incomingRaw: widget.incoming ?? openMessageStreamTls(
                         host: widget.session.host,
                         port: widget.session.port,
@@ -571,6 +572,7 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
                       selfUserId: _selfId,
                       peerUserId: peerId,
                       initial: msgs,
+                      peerName: _nicknames[peerId],
                       inbound: _incoming.stream,
                     ),
                   ),
@@ -609,6 +611,7 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
                   selfUserId: _selfId,
                   peerUserId: sel,
                   initial: const [],
+                  peerName: _nicknames[sel],
                   inbound: _incoming.stream,
                 ),
               ),
@@ -632,7 +635,8 @@ class ChatIdentityPage extends StatefulWidget {
   final String recipientId;
   final String recipientPubKey;
   final Stream<String> incomingRaw;
-  const ChatIdentityPage({super.key, required this.session, required this.selfUserId, required this.recipientId, required this.recipientPubKey, required this.incomingRaw});
+  final String? recipientName;
+  const ChatIdentityPage({super.key, required this.session, required this.selfUserId, required this.recipientId, required this.recipientPubKey, required this.incomingRaw, this.recipientName});
   @override
   State<ChatIdentityPage> createState() => _ChatIdentityPageState();
 }
@@ -832,8 +836,9 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
   @override
   Widget build(BuildContext context) {
     final ridShort = widget.recipientId.length > 10 ? widget.recipientId.substring(0, 10) + '…' : widget.recipientId;
+    final title = widget.recipientName?.isNotEmpty == true ? widget.recipientName! : 'Chat: $ridShort';
     return Scaffold(
-      appBar: AppBar(title: Text('Chat: $ridShort')),
+      appBar: AppBar(title: Text(title)),
       body: Column(
         children: [
           Expanded(
@@ -911,7 +916,8 @@ class ChatPage extends StatefulWidget {
   final int peerUserId;
   final List<HistoryMessage> initial;
   final Stream<HistoryMessage>? inbound;
-  const ChatPage({super.key, required this.session, required this.selfUserId, required this.peerUserId, required this.initial, this.inbound});
+  final String? peerName;
+  const ChatPage({super.key, required this.session, required this.selfUserId, required this.peerUserId, required this.initial, this.inbound, this.peerName});
 
   @override
   State<ChatPage> createState() => _ChatPageState();
@@ -1041,9 +1047,7 @@ class _ChatPageState extends State<ChatPage> {
     final self = widget.selfUserId;
     final msgs = _messages.where((m) => m.fromUserId == widget.peerUserId || m.toUserId == widget.peerUserId).toList();
     return Scaffold(
-      appBar: AppBar(
-        title: Text('User ${widget.peerUserId}'),
-      ),
+      appBar: AppBar(title: Text(widget.peerName?.isNotEmpty == true ? widget.peerName! : 'User ${widget.peerUserId}')),
       body: Column(
         children: [
           Expanded(
