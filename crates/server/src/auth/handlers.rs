@@ -3,11 +3,11 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
-use super::responses::{send_auth_error_response, send_auth_success_response};
+use super::responses::{send_auth_error_response, send_auth_success_response_identity};
 use crate::models::client_message::{AuthRequest, ClientMessage};
 use crate::utils::db_utils::{authenticate_user, register_user};
 
-pub async fn handle_auth_command_error<W>(stream: &mut W) -> tokio::io::Result<Option<i64>>
+pub async fn handle_auth_command_error<W>(stream: &mut W) -> tokio::io::Result<Option<String>>
 where
     W: AsyncWrite + Unpin,
 {
@@ -25,20 +25,23 @@ where
 pub async fn handle_auth_success<W>(
     stream: &mut W,
     client_addr: SocketAddr,
-    user_id: i64,
-) -> tokio::io::Result<Option<i64>>
+    identity_key: String,
+) -> tokio::io::Result<Option<String>>
 where
     W: AsyncWrite + Unpin,
 {
-    send_auth_success_response(stream, user_id, "Authentication successful").await?;
+    // Identity-based auth: return id string (no numeric user_id)
+    send_auth_success_response_identity(stream, &identity_key, "Authentication successful").await?;
     println!(
         "User {} authenticated successfully from {}",
-        user_id, client_addr
+        identity_key, client_addr
     );
-    Ok(Some(user_id))
+    // TEMPORARY: Print identity on auth so it can be shared
+    println!("(TEMPORARY) Client ID: {}", identity_key);
+    Ok(Some(identity_key))
 }
 
-pub async fn handle_auth_failure<W>(stream: &mut W) -> tokio::io::Result<Option<i64>>
+pub async fn handle_auth_failure<W>(stream: &mut W) -> tokio::io::Result<Option<String>>
 where
     W: AsyncWrite + Unpin,
 {
@@ -49,7 +52,7 @@ where
 pub async fn handle_auth_db_error<W>(
     stream: &mut W,
     e: rusqlite::Error,
-) -> tokio::io::Result<Option<i64>>
+) -> tokio::io::Result<Option<String>>
 where
     W: AsyncWrite + Unpin,
 {
@@ -62,7 +65,7 @@ pub async fn handle_auth_parse_error<W>(
     stream: &mut W,
     client_addr: SocketAddr,
     e: serde_json::Error,
-) -> tokio::io::Result<Option<i64>>
+) -> tokio::io::Result<Option<String>>
 where
     W: AsyncWrite + Unpin,
 {
@@ -74,23 +77,26 @@ where
 pub async fn handle_registration_success<W>(
     stream: &mut W,
     client_addr: SocketAddr,
-    user_id: i64,
-) -> tokio::io::Result<Option<i64>>
+    identity_key: String,
+) -> tokio::io::Result<Option<String>>
 where
     W: AsyncWrite + Unpin,
 {
-    send_auth_success_response(stream, user_id, "Registration successful").await?;
+    // Identity-based registration: return id string
+    send_auth_success_response_identity(stream, &identity_key, "Registration successful").await?;
     println!(
         "User {} registered successfully from {}",
-        user_id, client_addr
+        identity_key, client_addr
     );
-    Ok(Some(user_id))
+    // TEMPORARY: Print identity on registration so it can be shared
+    println!("(TEMPORARY) Client ID: {}", identity_key);
+    Ok(Some(identity_key))
 }
 
 pub async fn handle_registration_error<W>(
     stream: &mut W,
     e: rusqlite::Error,
-) -> tokio::io::Result<Option<i64>>
+) -> tokio::io::Result<Option<String>>
 where
     W: AsyncWrite + Unpin,
 {
@@ -108,7 +114,7 @@ pub async fn handle_registration_parse_error<W>(
     stream: &mut W,
     client_addr: SocketAddr,
     e: serde_json::Error,
-) -> tokio::io::Result<Option<i64>>
+) -> tokio::io::Result<Option<String>>
 where
     W: AsyncWrite + Unpin,
 {
@@ -122,22 +128,43 @@ pub async fn handle_auth_login<W>(
     conn: Arc<Mutex<Connection>>,
     client_addr: SocketAddr,
     msg: &ClientMessage,
-) -> tokio::io::Result<Option<i64>>
+) -> tokio::io::Result<Option<String>>
 where
     W: AsyncWrite + Unpin,
 {
-    match serde_json::from_str::<AuthRequest>(&msg.data) {
-        Ok(login_data) => match authenticate_user(
-            Arc::clone(&conn),
-            &login_data.passphrase,
-            &login_data.password,
-        )
-        .await
-        {
-            Ok(Some(user_id)) => handle_auth_success(stream, client_addr, user_id).await,
-            Ok(None) => handle_auth_failure(stream).await,
-            Err(e) => handle_auth_db_error(stream, e).await,
-        },
+    match serde_json::from_str::<serde_json::Value>(&msg.data) {
+        Ok(val) => {
+            // Accept either {"id": "..."} or {"identity_key": "..."}
+            let id_field = val
+                .get("id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .or_else(|| {
+                    val.get("identity_key")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                });
+            if let Some(identity_key) = id_field {
+                return handle_auth_success(stream, client_addr, identity_key).await;
+            }
+            // Fallback to legacy DB auth if provided
+            match serde_json::from_value::<AuthRequest>(val) {
+                Ok(login_data) => match authenticate_user(
+                    Arc::clone(&conn),
+                    &login_data.passphrase,
+                    &login_data.password,
+                )
+                .await
+                {
+                    Ok(Some(user_id)) => {
+                        handle_auth_success(stream, client_addr, user_id.to_string()).await
+                    }
+                    Ok(None) => handle_auth_failure(stream).await,
+                    Err(e) => handle_auth_db_error(stream, e).await,
+                },
+                Err(e) => handle_auth_parse_error(stream, client_addr, e).await,
+            }
+        }
         Err(e) => handle_auth_parse_error(stream, client_addr, e).await,
     }
 }
@@ -147,21 +174,41 @@ pub async fn handle_auth_register<W>(
     conn: Arc<Mutex<Connection>>,
     client_addr: SocketAddr,
     msg: &ClientMessage,
-) -> tokio::io::Result<Option<i64>>
+) -> tokio::io::Result<Option<String>>
 where
     W: AsyncWrite + Unpin,
 {
-    match serde_json::from_str::<AuthRequest>(&msg.data) {
-        Ok(register_data) => match register_user(
-            Arc::clone(&conn),
-            &register_data.passphrase,
-            &register_data.password,
-        )
-        .await
-        {
-            Ok(user_id) => handle_registration_success(stream, client_addr, user_id).await,
-            Err(e) => handle_registration_error(stream, e).await,
-        },
+    match serde_json::from_str::<serde_json::Value>(&msg.data) {
+        Ok(val) => {
+            let id_field = val
+                .get("id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .or_else(|| {
+                    val.get("identity_key")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                });
+            if let Some(identity_key) = id_field {
+                return handle_registration_success(stream, client_addr, identity_key).await;
+            }
+            // Fallback to legacy DB registration if provided
+            match serde_json::from_value::<AuthRequest>(val) {
+                Ok(register_data) => match register_user(
+                    Arc::clone(&conn),
+                    &register_data.passphrase,
+                    &register_data.password,
+                )
+                .await
+                {
+                    Ok(user_id) => {
+                        handle_registration_success(stream, client_addr, user_id.to_string()).await
+                    }
+                    Err(e) => handle_registration_error(stream, e).await,
+                },
+                Err(e) => handle_registration_parse_error(stream, client_addr, e).await,
+            }
+        }
         Err(e) => handle_registration_parse_error(stream, client_addr, e).await,
     }
 }
@@ -171,7 +218,7 @@ pub async fn handle_auth<W>(
     conn: Arc<Mutex<Connection>>,
     client_addr: SocketAddr,
     message: &ClientMessage,
-) -> tokio::io::Result<Option<i64>>
+) -> tokio::io::Result<Option<String>>
 where
     W: AsyncWrite + Unpin,
 {

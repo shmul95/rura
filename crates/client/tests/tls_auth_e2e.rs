@@ -117,6 +117,7 @@ async fn accept_n_connections(
     port
 }
 
+#[ignore = "requires network bind permission in the test environment"]
 #[tokio::test]
 async fn tls_register_then_login_end_to_end() {
     // Generate TLS materials and write to temporary files for server acceptor

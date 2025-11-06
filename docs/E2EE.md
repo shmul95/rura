@@ -14,7 +14,7 @@ Goal: ensure the server can route and persist messages without ever learning the
 - The server stores keys in `users.pubkey` but cannot decrypt messages.
 
 ## Message Envelope (Opaque to Server)
-- Use `message` with `data { to_user_id, body, saved? }`.
+- Use `message` with `data { to_user_id, body }`.
 - Treat `body` as opaque ciphertext. Suggested payload format:
   - `v1:<b64_ephemeral_pub>:<b64_nonce>:<b64_ciphertext>`
   - Derive a symmetric key via X25519 ECDH between the sender’s ephemeral key and recipient’s long-term public key; then apply AEAD (e.g., XChaCha20-Poly1305) over the cleartext JSON payload your app defines.
@@ -26,7 +26,7 @@ Goal: ensure the server can route and persist messages without ever learning the
   "kind": "chat",            // app-defined semantics (server never sees this)
   "text": "hello world",
   "ts": 1710000000,
-  "extras": { "saved": false }
+  "extras": { "example": true }
 }
 ```
 
@@ -55,7 +55,7 @@ Rust client option (if you prefer encrypting before FRB):
 
 ## Privacy Hygiene
 - The server now avoids logging full payloads; only command names and lengths are logged.
-- The `saved` flag is a server-side retention hint; if you want to hide even that, move it inside your encrypted payload and stop setting the server flag.
+- The server no longer accepts/uses a `saved` flag. Messages are persisted on the client by default; treat any retention semantics within your encrypted payload if needed.
 
 ## Caveats & Hardening
 - Identity/authentication of keys (TOFU or signatures): Consider signing ephemeral keys with a long-term signing key (Ed25519) and exposing the verify key as the published pubkey. Adds protection against MITM of the key directory.

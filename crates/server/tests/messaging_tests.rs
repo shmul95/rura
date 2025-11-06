@@ -30,7 +30,9 @@ async fn test_send_direct_to_online_user_delivers_message() {
     // Simulate recipient user with an outbound channel registered in state
     let (tx_bob, mut rx_bob) = mpsc::unbounded_channel::<ClientMessage>();
     let bob_id = 2_i64;
-    state.register(bob_id, ClientHandle { tx: tx_bob }).await;
+    state
+        .register(bob_id.to_string(), ClientHandle { tx: tx_bob })
+        .await;
 
     // Sender user id
     let alice_id = 1_i64;
@@ -39,7 +41,6 @@ async fn test_send_direct_to_online_user_delivers_message() {
     let req = DirectMessageReq {
         to_user_id: bob_id,
         body: "hello world".to_string(),
-        saved: None,
     };
     send_direct(Arc::clone(&state), Arc::clone(&conn), alice_id, req)
         .await
@@ -83,7 +84,9 @@ async fn test_send_direct_to_unknown_user_sends_nothing() {
 
     // Create a channel for some other user and register them (not the target)
     let (tx_other, mut rx_other) = mpsc::unbounded_channel::<ClientMessage>();
-    state.register(999, ClientHandle { tx: tx_other }).await;
+    state
+        .register(999.to_string(), ClientHandle { tx: tx_other })
+        .await;
 
     // Attempt to send to a user id that is not registered
     let unknown_user_id = 12345_i64;
@@ -91,7 +94,6 @@ async fn test_send_direct_to_unknown_user_sends_nothing() {
     let req = DirectMessageReq {
         to_user_id: unknown_user_id,
         body: "are you there?".to_string(),
-        saved: None,
     };
     send_direct(Arc::clone(&state), Arc::clone(&conn), from_user_id, req)
         .await

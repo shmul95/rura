@@ -15,14 +15,14 @@ pub(super) async fn handle_read_success<S>(
     conn: Arc<Mutex<Connection>>,
     state: Arc<AppState>,
     client_addr: SocketAddr,
-    authenticated_user_id: &mut Option<i64>,
+    authenticated_user_id: &mut Option<String>,
     outbound_tx: Option<&mpsc::UnboundedSender<ClientMessage>>,
     buffer: &[u8],
 ) -> tokio::io::Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    if let Some(user_id) = *authenticated_user_id {
+    if let Some(ref user_id) = *authenticated_user_id {
         // User is authenticated, allow normal communication
         let tx = outbound_tx.expect("outbound sender not set for authenticated user");
         authed::handle_client_message(
@@ -30,7 +30,7 @@ where
             Arc::clone(&conn),
             tx,
             client_addr,
-            user_id,
+            user_id.clone(),
             buffer,
         )
         .await

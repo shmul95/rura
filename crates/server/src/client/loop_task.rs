@@ -20,7 +20,7 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let mut buffer = [0; 1024];
-    let mut authenticated_user_id: Option<i64> = None;
+    let mut authenticated_user_id: Option<String> = None;
     let mut outbound_tx: Option<
         mpsc::UnboundedSender<crate::models::client_message::ClientMessage>,
     > = None;
@@ -40,7 +40,7 @@ where
                         Ok(n) => {
                             if debug_io_enabled() {
                                 let s = String::from_utf8_lossy(&buffer[..n]).to_string();
-                                if let Some(uid) = authenticated_user_id {
+                                if let Some(ref uid) = authenticated_user_id {
                                     println!("<<< [{} {}] {}", client_addr, uid, s.trim_end());
                                 } else {
                                     println!("<<< [{}] {}", client_addr, s.trim_end());
@@ -56,10 +56,13 @@ where
                                 outbound_tx.as_ref(),
                                 &buffer[..n],
                             ).await?;
-
-                            if let Some(user_id) = authenticated_user_id.filter(|_| was_unauth) {
+                            if was_unauth
+                                && let Some(user_id) = authenticated_user_id.clone()
+                            {
                                 let (tx, new_rx) = mpsc::unbounded_channel();
-                                state.register(user_id, ClientHandle { tx: tx.clone() }).await;
+                                state
+                                    .register(user_id, ClientHandle { tx: tx.clone() })
+                                    .await;
                                 outbound_tx = Some(tx);
                                 outbound_rx = Some(new_rx);
                             }
@@ -76,7 +79,7 @@ where
                             if let Ok(mut json) = serde_json::to_string(&msg) {
                                 json.push('\n');
                                 if debug_io_enabled() {
-                                    if let Some(uid) = authenticated_user_id {
+                                    if let Some(ref uid) = authenticated_user_id {
                                         print!(">>> [{} {}] ", client_addr, uid);
                                     } else {
                                         print!(">>> [{}] ", client_addr);
@@ -105,7 +108,7 @@ where
                 Ok(n) => {
                     if debug_io_enabled() {
                         let s = String::from_utf8_lossy(&buffer[..n]).to_string();
-                        if let Some(uid) = authenticated_user_id {
+                        if let Some(ref uid) = authenticated_user_id {
                             println!("<<< [{} {}] {}", client_addr, uid, s.trim_end());
                         } else {
                             println!("<<< [{}] {}", client_addr, s.trim_end());
@@ -124,7 +127,7 @@ where
                     .await?;
 
                     // If we just became authenticated, set up outbound channel and register
-                    if let Some(user_id) = authenticated_user_id.filter(|_| was_unauth) {
+                    if was_unauth && let Some(user_id) = authenticated_user_id.clone() {
                         let (tx, rx) = mpsc::unbounded_channel();
                         state
                             .register(user_id, ClientHandle { tx: tx.clone() })
@@ -142,7 +145,7 @@ where
     }
     // Cleanup: unregister user and drop outbound sender if any
     if let Some(user_id) = authenticated_user_id {
-        state.unregister(user_id).await;
+        state.unregister(&user_id).await;
     }
     Ok(())
 }

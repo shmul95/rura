@@ -1,0 +1,102 @@
+project: Rura
+description: >
+  Rura is an async Rust + Flutter messaging system with mandatory TLS and end-to-end encryption.
+  The goal of this phase is to implement secure local storage (password-protected databases),
+  real AEAD-based E2EE, and keep the documentation in sync.
+
+milestone: Secure Local Storage & Real E2EE
+
+tasks:
+
+  - id: local_db_architecture
+    title: Implement dual local databases (persistent + ephemeral)
+    details: |
+      Create two SQLite databases managed client-side:
+        - Persistent DB (encrypted on disk): contacts, messages, keys, settings.
+        - Ephemeral DB (in-memory): temporary and self-destructing messages.
+      Implement a `local_storage.rs` abstraction layer for init, read/write, and auto-wipe behavior.
+    files:
+      - crates/client/src/local_storage.rs
+      - crates/client/src/lib.rs
+      - crates/client/flutter_app/lib/*
+    status: completed
+
+  - id: db_encryption
+    title: Encrypt local persistent database using password-derived key
+    details: |
+      - Prompt user for password on first launch.
+      - Derive key using Argon2id with a unique salt.
+      - Use AES-GCM or XChaCha20-Poly1305 for encrypting the database file.
+      - Store the salt in plaintext config.
+      - Private key and DB decryption both depend on the password-derived key.
+    files:
+      - crates/client/src/security.rs
+      - crates/client/src/local_storage.rs
+      - crates/client/flutter_app/lib/login_screen.dart
+    status: completed
+
+  - id: real_e2ee
+    title: Replace fake base64 envelope with real AEAD encryption
+    details: |
+      - On first run, generate X25519 identity keypair.
+      - Publish public key via stream API (setPubkeyOverStream).
+      - Fetch peer pubkeys and derive shared secrets.
+      - Encrypt messages with XChaCha20-Poly1305 and produce envelope:
+        v1:<b64_ephemeral_pub>:<b64_nonce>:<b64_ciphertext>
+      - Decrypt on recipient side.
+      - Update tests to confirm envelope integrity.
+    files:
+      - crates/client/src/e2ee.rs
+      - crates/server/tests/e2ee_tests.rs
+      - docs/E2EE.md
+    status: pending
+
+  - id: password_flow
+    title: Implement password unlock + key management flow
+    details: |
+      - Derive master key from password (Argon2id -> 32-byte key).
+      - Use master key to decrypt local identity key and DB.
+      - Keep salt + metadata in unencrypted rura_config.json.
+      - Add FRB binding for password unlock from Flutter UI.
+    files:
+      - crates/client/src/security.rs
+      - crates/client/src/api.rs
+      - crates/client/flutter_app/lib/auth/*
+    status: pending
+
+  - id: documentation_update
+    title: Update all project documentation for new architecture
+    details: |
+      Update and extend documentation to reflect the secure local storage design:
+        - ARCHITECTURE.md: Add diagram of client ↔ server ↔ local DBs.
+        - DATABASE.md: Explain both DB schemas and encryption flow.
+        - E2EE.md: Describe keypair gen, shared secret, AEAD, envelope v1.
+        - README.md: Add Local Storage & Encryption section.
+    files:
+      - docs/ARCHITECTURE.md
+      - docs/DATABASE.md
+      - docs/E2EE.md
+      - README.md
+    status: pending
+
+  - id: testing
+    title: Expand test suite for E2EE and database
+    details: |
+      - Add client-side tests for key derivation, DB unlock/lock, and envelope round-trip.
+      - Extend server tests to validate message envelope shape and delivery.
+      - Ensure malformed or tampered envelopes are rejected.
+      - Integrate tests into CI (`cargo test --all`).
+    files:
+      - crates/client/tests/*
+      - crates/server/tests/*
+      - .github/workflows/ci.yml
+    status: pending
+
+  - id: future_enhancements
+    title: Optional future improvements
+    details: |
+      - Add encrypted backup/export (.encdb file).
+      - Implement password change (re-encrypt DB + private key).
+      - Support self-destruct timers for ephemeral messages.
+      - Enable multi-device sync via encrypted DB transfer.
+    status: backlog

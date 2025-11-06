@@ -1,0 +1,29 @@
+pas de db users
+	-> pour envoyer un message il faut un identifiant et le serveur sait que il doit envoyer tel msg a tel personne, mais il sait pas c'est qui jusqu'a qu'en se connectant il se presente comme tel personne et donc a partir de ce moment la, le serveur peut lui envoyer le message
+	-> l'envoyeur doit donc connaitre 2 information sur le receveur, son identifiant et sa clé public et elle est donné soit
+		-> un lien a usage unique
+		-> un qr code a usage unique
+	-> le serveur na meme plus besoin d'avoir une base de donné pour chaque utilisateur et les identifiant ne servent plus qua acceder a l'application et au information qui sont contenu dans l'application comme la liste des contact avec leur clé publique etc.
+
+mode synchornisation si jamais tu veux avoir les contacts et les messages sur l'ordinateur ou bien que les contactes et pouvoir ecrire depuis un autre appareil
+
+Problematique, comment savoir que l'identifiant du client est reelement unique:
+	-> solution 1 : le serveur garde une liste de tout les identifiant sans jamais les retracé a qui que ce soit
+	-> solution 2 : trouver un algo qui serait capable de faire ca mais pas sur de pouvoir trouver
+	
+mot de pass qui crypte tout le contenue de l'utilisateur, messages comme contact seul moyen de recuperer c'est via un moyen de question en mode "quel etait le nom de votre premiere animal" ppar exemple.
+
+mode ephemere et mode sauvegarde, mode ephemere les msg sont dans un cache jusqu'a que le telephone redemarre ou que l'utilisateur decide et sauvegarde il sont sauvegarder au meme titre que les autres contacts
+
+anti espion, si qqun essaie de regarder ton ecran ou qu'il essaie de filmer ou bien screen share l'ecran, c'est automatiquement bloquer, ou bien l'ecran vire au noir.
+
+si il y a une tentative d'intrusion, face id qui marche pas, mdp erroné trop de foi, l'application prend en photo le coupable pour que quand le vrai utilisateur a la prochaine connexion puisse voir qui a essayer de s'introduire dans leur information
+
+question :
+- quesce que le trustless
+- qu'es ce qu'un sel unique (KDF)
+- v1 enveloppe
+
+remember : 
+codex resume 019a0e4f-74ba-7a73-9f3d-8efb2e7e7702
+

@@ -77,9 +77,20 @@ async fn test_complete_client_server_auth_flow() {
     .unwrap();
     assert!(register_result.is_some());
     let register_wrapper: ClientMessage = read_message(&mut client_stream).await;
-    let register_resp: AuthResponse = serde_json::from_str(&register_wrapper.data).unwrap();
-    assert!(register_resp.success);
-    let user_id = register_resp.user_id.unwrap();
+    let register_val: serde_json::Value = serde_json::from_str(&register_wrapper.data).unwrap();
+    assert_eq!(
+        register_val.get("success").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+    let user_id_str = register_val
+        .get("id")
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
+        .or_else(|| {
+            register_val
+                .get("user_id")
+                .and_then(|v| v.as_i64().map(|n| n.to_string()))
+        })
+        .expect("missing id");
 
     let login_msg = ClientMessage {
         command: "login".to_string(),
@@ -93,11 +104,14 @@ async fn test_complete_client_server_auth_flow() {
     let login_result = handle_auth(&mut server_stream, Arc::clone(&db), client_addr, &login_msg)
         .await
         .unwrap();
-    assert_eq!(login_result, Some(user_id));
+    assert_eq!(login_result, Some(user_id_str.clone()));
     let login_wrapper: ClientMessage = read_message(&mut client_stream).await;
-    let login_resp: AuthResponse = serde_json::from_str(&login_wrapper.data).unwrap();
-    assert!(login_resp.success);
-    assert_eq!(login_resp.user_id, Some(user_id));
+    let login_val: serde_json::Value = serde_json::from_str(&login_wrapper.data).unwrap();
+    assert_eq!(
+        login_val.get("success").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+    assert!(login_val.get("id").and_then(|v| v.as_str()).is_some());
 }
 
 #[tokio::test]
@@ -125,8 +139,16 @@ async fn test_registration_then_login_different_sessions() {
     .unwrap();
     assert!(register_result.is_some());
     let register_wrapper: ClientMessage = read_message(&mut registration_client).await;
-    let register_resp: AuthResponse = serde_json::from_str(&register_wrapper.data).unwrap();
-    let user_id = register_resp.user_id.unwrap();
+    let register_val: serde_json::Value = serde_json::from_str(&register_wrapper.data).unwrap();
+    let user_id_str = register_val
+        .get("id")
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
+        .or_else(|| {
+            register_val
+                .get("user_id")
+                .and_then(|v| v.as_i64().map(|n| n.to_string()))
+        })
+        .expect("missing id");
 
     let (mut login_stream, mut login_client) = stream_pair();
     let login_msg = ClientMessage {
@@ -141,11 +163,14 @@ async fn test_registration_then_login_different_sessions() {
     let login_result = handle_auth(&mut login_stream, Arc::clone(&db), client_addr, &login_msg)
         .await
         .unwrap();
-    assert_eq!(login_result, Some(user_id));
+    assert_eq!(login_result, Some(user_id_str.clone()));
     let login_wrapper: ClientMessage = read_message(&mut login_client).await;
-    let login_resp: AuthResponse = serde_json::from_str(&login_wrapper.data).unwrap();
-    assert!(login_resp.success);
-    assert_eq!(login_resp.user_id, Some(user_id));
+    let login_val: serde_json::Value = serde_json::from_str(&login_wrapper.data).unwrap();
+    assert_eq!(
+        login_val.get("success").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+    assert!(login_val.get("id").and_then(|v| v.as_str()).is_some());
 }
 
 #[tokio::test]

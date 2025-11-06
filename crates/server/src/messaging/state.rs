@@ -10,7 +10,7 @@ pub struct ClientHandle {
 }
 
 pub struct AppState {
-    users: RwLock<HashMap<i64, ClientHandle>>, // user_id -> handle
+    users: RwLock<HashMap<String, ClientHandle>>, // identity_key -> handle
     require_e2ee: bool,
 }
 
@@ -22,19 +22,22 @@ impl AppState {
         }
     }
 
-    pub async fn register(&self, user_id: i64, handle: ClientHandle) {
+    pub async fn register(&self, identity_key: String, handle: ClientHandle) {
         let mut guard = self.users.write().await;
-        guard.insert(user_id, handle);
+        guard.insert(identity_key, handle);
     }
 
-    pub async fn unregister(&self, user_id: i64) {
+    pub async fn unregister(&self, identity_key: &str) {
         let mut guard = self.users.write().await;
-        guard.remove(&user_id);
+        guard.remove(identity_key);
     }
 
-    pub async fn get_sender(&self, user_id: i64) -> Option<mpsc::UnboundedSender<ClientMessage>> {
+    pub async fn get_sender(
+        &self,
+        identity_key: &str,
+    ) -> Option<mpsc::UnboundedSender<ClientMessage>> {
         let guard = self.users.read().await;
-        guard.get(&user_id).map(|h| h.tx.clone())
+        guard.get(identity_key).map(|h| h.tx.clone())
     }
 
     pub fn require_e2ee(&self) -> bool {

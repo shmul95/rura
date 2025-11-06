@@ -9,13 +9,15 @@ async fn test_register_get_unregister_sender() {
     let (tx, mut rx) = mpsc::unbounded_channel::<ClientMessage>();
 
     // No sender registered yet
-    assert!(state.get_sender(1).await.is_none());
+    assert!(state.get_sender("1").await.is_none());
 
     // Register
-    state.register(1, ClientHandle { tx: tx.clone() }).await;
+    state
+        .register("1".to_string(), ClientHandle { tx: tx.clone() })
+        .await;
 
     // Get and send a message
-    let got_tx = state.get_sender(1).await.expect("expected sender");
+    let got_tx = state.get_sender("1").await.expect("expected sender");
     got_tx
         .send(ClientMessage {
             command: "ping".into(),
@@ -29,6 +31,6 @@ async fn test_register_get_unregister_sender() {
     assert_eq!(msg.data, "pong");
 
     // Unregister
-    state.unregister(1).await;
-    assert!(state.get_sender(1).await.is_none());
+    state.unregister("1").await;
+    assert!(state.get_sender("1").await.is_none());
 }

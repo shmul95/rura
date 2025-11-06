@@ -1,4 +1,5 @@
 use crate::StreamSink;
+use base64::{Engine as _, engine::general_purpose};
 use flutter_rust_bridge::frb;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
@@ -12,12 +13,24 @@ pub type ClientMessage = rura_models::client_message::ClientMessage;
 // NOTE: Keep client-local history/message structs to avoid tight coupling to rura_models.
 use rustls::pki_types::{CertificateDer, ServerName};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
-use serde::{Deserialize, Serialize};
-use std::fs;
+// serde derives are referenced via fully qualified paths in this file; no direct import needed
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
-use std::path::{Path, PathBuf};
+// no path utilities needed after removing legacy JSON cache
 use std::sync::{Arc, Once};
+
+fn session_id_from_identity(id_b64: &str) -> Result<i64, String> {
+    // Derive a stable 63-bit numeric from the 256-bit base64 identity
+    let bytes = general_purpose::STANDARD
+        .decode(id_b64)
+        .map_err(|e| format!("bad id base64: {e}"))?;
+    if bytes.len() < 8 {
+        return Err("identity too short".to_string());
+    }
+    let slice: [u8; 8] = bytes[0..8].try_into().unwrap();
+    let v = u64::from_be_bytes(slice) & 0x7FFF_FFFF_FFFF_FFFF; // keep it positive
+    Ok(v as i64)
+}
 
 /// Simple Dart-friendly login response.
 #[frb]
@@ -37,7 +50,6 @@ pub struct HistoryMessage {
     pub to_user_id: i64,
     pub body: String,
     pub timestamp: String,
-    pub saved: bool,
 }
 
 // Use shared protocol models from rura_models for internal serialization.
@@ -51,7 +63,6 @@ impl From<ModelHistoryMessage> for HistoryMessage {
             to_user_id: src.to_user_id,
             body: src.body,
             timestamp: src.timestamp,
-            saved: src.saved,
         }
     }
 }
@@ -61,128 +72,70 @@ pub type HistoryResponse = rura_models::messaging::HistoryResponse;
 
 // ---------- Local cache helpers ----------
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct LocalMsg {
-    id: i64,
-    from_user_id: i64,
-    to_user_id: i64,
-    body: String,
-    timestamp: String,
-    saved: bool,
-}
-
-fn cache_base_dir() -> PathBuf {
-    if let Ok(custom) = std::env::var("RURA_CLIENT_CACHE_DIR") {
-        return PathBuf::from(custom);
-    }
-    // Default: inside client crate (parent of flutter_app)
-    std::env::current_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join("../.cache")
-}
-
-fn ensure_dir(path: &Path) -> Result<(), String> {
-    fs::create_dir_all(path).map_err(|e| format!("Failed to create dir {}: {e}", path.display()))
-}
-
-fn user_dir(user_id: i64) -> PathBuf {
-    cache_base_dir().join("users").join(user_id.to_string())
-}
-fn chats_dir(user_id: i64) -> PathBuf {
-    user_dir(user_id).join("chats")
-}
-fn chat_file(user_id: i64, peer_id: i64) -> PathBuf {
-    chats_dir(user_id).join(format!("{peer_id}.json"))
-}
-
-fn read_chat(user_id: i64, peer_id: i64) -> Result<Vec<LocalMsg>, String> {
-    let path = chat_file(user_id, peer_id);
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let data =
-        fs::read_to_string(&path).map_err(|e| format!("Read {} failed: {e}", path.display()))?;
-    let v: Vec<LocalMsg> =
-        serde_json::from_str(&data).map_err(|e| format!("Parse {} failed: {e}", path.display()))?;
-    Ok(v)
-}
-
-fn write_chat(user_id: i64, peer_id: i64, msgs: &[LocalMsg]) -> Result<(), String> {
-    let dir = chats_dir(user_id);
-    ensure_dir(&dir)?;
-    let path = chat_file(user_id, peer_id);
-    let data = serde_json::to_string_pretty(msgs).map_err(|e| format!("Serialize failed: {e}"))?;
-    fs::write(&path, data).map_err(|e| format!("Write {} failed: {e}", path.display()))
-}
-
-fn list_chat_files(user_id: i64) -> Vec<PathBuf> {
-    let dir = chats_dir(user_id);
-    match fs::read_dir(dir) {
-        Ok(rd) => rd.filter_map(|e| e.ok()).map(|e| e.path()).collect(),
-        Err(_) => Vec::new(),
-    }
-}
+// Removed legacy JSON chat cache helpers in favor of encrypted SQLite local storage.
 
 #[frb]
 pub fn append_local_message(
-    user_id: i64,
     from_user_id: i64,
     to_user_id: i64,
     body: String,
     timestamp: String,
 ) -> Result<(), String> {
-    let peer = if from_user_id == user_id {
-        to_user_id
-    } else {
-        from_user_id
-    };
-    let mut msgs = read_chat(user_id, peer)?;
-    let next_id = msgs.last().map(|m| m.id + 1).unwrap_or(1);
-    msgs.push(LocalMsg {
-        id: next_id,
-        from_user_id,
-        to_user_id,
-        body,
-        timestamp,
-        saved: false,
-    });
-    write_chat(user_id, peer, &msgs)
+    crate::local_storage::init_storage()?;
+    // Persist messages to the on-disk database by default.
+    crate::local_storage::append_persistent_message(from_user_id, to_user_id, body, timestamp)
 }
 
 #[frb]
-pub fn load_local_history(
-    user_id: i64,
-    limit: Option<usize>,
-) -> Result<Vec<HistoryMessage>, String> {
-    let mut all: Vec<LocalMsg> = Vec::new();
-    for path in list_chat_files(user_id) {
-        if let Some(_stem) = path.file_stem().and_then(|s| s.to_str()) {
-            match fs::read_to_string(&path) {
-                Ok(data) => match serde_json::from_str::<Vec<LocalMsg>>(&data) {
-                    Ok(mut v) => all.append(&mut v),
-                    Err(_) => {}
-                },
-                Err(_) => {}
-            }
-        }
+pub fn load_local_history(limit: Option<usize>) -> Result<Vec<HistoryMessage>, String> {
+    crate::local_storage::init_storage()?;
+    crate::local_storage::load_history(limit)
+}
+
+/// Get the account's 256-bit random user_id (returns base64 string).
+#[frb]
+pub fn get_account_id() -> Result<String, String> {
+    let identity = crate::security::load_identity()?;
+    match identity {
+        Some(bundle) => Ok(bundle.user_id),
+        None => Err("No identity found. Please register first.".to_string()),
     }
-    // Sort by (timestamp, id)
-    all.sort_by(|a, b| a.timestamp.cmp(&b.timestamp).then_with(|| a.id.cmp(&b.id)));
-    let lim = limit.unwrap_or(usize::MAX);
-    let out = all.into_iter().rev().take(lim).collect::<Vec<_>>();
-    let mapped: Vec<HistoryMessage> = out
-        .into_iter()
-        .rev()
-        .map(|m| HistoryMessage {
-            id: m.id,
-            from_user_id: m.from_user_id,
-            to_user_id: m.to_user_id,
-            body: m.body,
-            timestamp: m.timestamp,
-            saved: m.saved,
-        })
-        .collect();
-    Ok(mapped)
+}
+
+/// Get the account's public key (base64).
+#[frb]
+pub fn get_account_pubkey() -> Result<String, String> {
+    let identity = crate::security::load_identity()?;
+    match identity {
+        Some(bundle) => Ok(bundle.public_b64),
+        None => Err("No identity found. Please register first.".to_string()),
+    }
+}
+
+/// Add or update a contact locally with an ID (base64) and public key (base64).
+#[frb]
+pub fn add_contact(user_id: String, pubkey: String) -> Result<(), String> {
+    crate::local_storage::init_storage()?;
+    crate::local_storage::add_contact(user_id, pubkey, None)
+}
+
+/// Add or update a contact with optional nickname.
+#[frb]
+pub fn add_contact_with_nickname(
+    user_id: String,
+    pubkey: String,
+    nickname: Option<String>,
+) -> Result<(), String> {
+    crate::local_storage::init_storage()?;
+    crate::local_storage::add_contact(user_id, pubkey, nickname)
+}
+
+/// List contacts as a JSON array [{user_id, pubkey, nickname}].
+#[frb]
+pub fn list_contacts_json() -> Result<String, String> {
+    crate::local_storage::init_storage()?;
+    let rows = crate::local_storage::list_contacts()?;
+    serde_json::to_string(&rows).map_err(|e| format!("serialize contacts: {e}"))
 }
 
 fn build_root_store_from_pem(pem: &str) -> Result<RootCertStore, String> {
@@ -229,8 +182,8 @@ pub fn login_tls(
     host: String,
     port: u16,
     ca_pem: String,
-    passphrase: String,
-    password: String,
+    _passphrase: String,
+    _password: String,
 ) -> Result<LoginResponse, String> {
     // Ensure a crypto provider is installed (rustls 0.23 requires this)
     static INIT: Once = Once::new();
@@ -259,15 +212,14 @@ pub fn login_tls(
     // Read initial auth_required line (ignore failures)
     let _ = read_line(&mut tls);
 
-    // Send login envelope
-    let login = AuthRequest {
-        passphrase,
-        password,
-        identity_key: None,
-    };
+    // Send login envelope with identity id only
+    let identity_id = crate::security::load_identity()?
+        .map(|b| b.user_id)
+        .unwrap_or_default();
+    let payload = serde_json::json!({ "id": identity_id });
     let envelope = ClientMessage {
         command: "login".to_string(),
-        data: serde_json::to_string(&login).map_err(|e| format!("Serialize error: {e}"))?,
+        data: payload.to_string(),
     };
     let mut line = serde_json::to_string(&envelope).map_err(|e| format!("Serialize error: {e}"))?;
     line.push('\n');
@@ -282,8 +234,20 @@ pub fn login_tls(
     if wrapper.command != "auth_response" {
         return Err(format!("Unexpected command: {}", wrapper.command));
     }
-    let resp: AuthResponse = serde_json::from_str(&wrapper.data)
+    // Parse response and support identity-based field `id`
+    let resp_val: serde_json::Value = serde_json::from_str(&wrapper.data)
         .map_err(|e| format!("Invalid auth_response data: {e}"))?;
+    let resp: AuthResponse = serde_json::from_value(resp_val.clone())
+        .map_err(|e| format!("Invalid auth_response shape: {e}"))?;
+    let user_id = if let Some(uid) = resp.user_id {
+        Some(uid)
+    } else if let Some(id_str) = resp_val.get("id").and_then(|v| v.as_str()) {
+        Some(session_id_from_identity(id_str)?)
+    } else if let Some(id_local) = crate::security::load_identity()?.map(|b| b.user_id) {
+        Some(session_id_from_identity(&id_local)?)
+    } else {
+        None
+    };
 
     // Send a graceful TLS close_notify before dropping the connection so the
     // server does not report an unexpected EOF warning.
@@ -293,7 +257,7 @@ pub fn login_tls(
     Ok(LoginResponse {
         success: resp.success,
         message: resp.message,
-        user_id: resp.user_id,
+        user_id,
     })
 }
 
@@ -303,8 +267,8 @@ pub fn register_tls(
     host: String,
     port: u16,
     ca_pem: String,
-    passphrase: String,
-    password: String,
+    _passphrase: String,
+    _password: String,
 ) -> Result<LoginResponse, String> {
     // Ensure a crypto provider is installed (rustls 0.23 requires this)
     static INIT: Once = Once::new();
@@ -334,15 +298,14 @@ pub fn register_tls(
     // Read initial auth_required line (ignore failures)
     let _ = read_line(&mut tls);
 
-    // Send register envelope
-    let register = AuthRequest {
-        passphrase,
-        password,
-        identity_key: None,
-    };
+    // Send register envelope with identity id only
+    let identity_id = crate::security::load_identity()?
+        .map(|b| b.user_id)
+        .unwrap_or_default();
+    let payload = serde_json::json!({ "id": identity_id });
     let envelope = ClientMessage {
         command: "register".to_string(),
-        data: serde_json::to_string(&register).map_err(|e| format!("Serialize error: {e}"))?,
+        data: payload.to_string(),
     };
     let mut line = serde_json::to_string(&envelope).map_err(|e| format!("Serialize error: {e}"))?;
     line.push('\n');
@@ -357,8 +320,19 @@ pub fn register_tls(
     if wrapper.command != "auth_response" {
         return Err(format!("Unexpected command: {}", wrapper.command));
     }
-    let resp: AuthResponse = serde_json::from_str(&wrapper.data)
+    let resp_val: serde_json::Value = serde_json::from_str(&wrapper.data)
         .map_err(|e| format!("Invalid auth_response data: {e}"))?;
+    let resp: AuthResponse = serde_json::from_value(resp_val.clone())
+        .map_err(|e| format!("Invalid auth_response shape: {e}"))?;
+    let user_id = if let Some(uid) = resp.user_id {
+        Some(uid)
+    } else if let Some(id_str) = resp_val.get("id").and_then(|v| v.as_str()) {
+        Some(session_id_from_identity(id_str)?)
+    } else if let Some(id_local) = crate::security::load_identity()?.map(|b| b.user_id) {
+        Some(session_id_from_identity(&id_local)?)
+    } else {
+        None
+    };
 
     // Graceful TLS close
     tls.conn.send_close_notify();
@@ -367,7 +341,7 @@ pub fn register_tls(
     Ok(LoginResponse {
         success: resp.success,
         message: resp.message,
-        user_id: resp.user_id,
+        user_id,
     })
 }
 
@@ -433,7 +407,6 @@ pub fn send_direct_message_tls(
     password: String,
     to_user_id: i64,
     body: String,
-    saved: Option<bool>,
 ) -> Result<SendResult, String> {
     fn is_base64ish(s: &str) -> bool {
         !s.is_empty()
@@ -476,13 +449,8 @@ pub fn send_direct_message_tls(
     struct OutgoingDM {
         to_user_id: i64,
         body: String,
-        saved: Option<bool>,
     }
-    let req = OutgoingDM {
-        to_user_id,
-        body,
-        saved,
-    };
+    let req = OutgoingDM { to_user_id, body };
     let env = ClientMessage {
         command: "message".to_string(),
         data: serde_json::to_string(&req).map_err(|e| format!("Serialize error: {e}"))?,
@@ -672,7 +640,6 @@ pub fn send_direct_message_over_stream(
     user_id: i64,
     to_user_id: i64,
     body: String,
-    saved: Option<bool>,
 ) -> Result<(), String> {
     fn is_base64ish(s: &str) -> bool {
         !s.is_empty()
@@ -708,13 +675,59 @@ pub fn send_direct_message_over_stream(
     struct OutgoingDM2 {
         to_user_id: i64,
         body: String,
-        saved: Option<bool>,
     }
-    let req = OutgoingDM2 {
-        to_user_id,
-        body,
-        saved,
+    let req = OutgoingDM2 { to_user_id, body };
+    let env = ClientMessage {
+        command: "message".to_string(),
+        data: serde_json::to_string(&req).map_err(|e| format!("Serialize error: {e}"))?,
     };
+    let mut line = serde_json::to_string(&env).map_err(|e| format!("Serialize error: {e}"))?;
+    line.push('\n');
+    tx.send(line)
+        .map_err(|_| "Failed to enqueue send".to_string())
+}
+
+/// Send a direct message targeting a peer by identity (base64 string) using an existing stream.
+#[frb]
+pub fn send_direct_message_over_stream_to_identity(
+    user_id: i64,
+    to_identity: String,
+    body: String,
+) -> Result<(), String> {
+    fn is_base64ish(s: &str) -> bool {
+        !s.is_empty()
+            && s.chars().all(
+                |c| matches!(c, 'A'..='Z' | 'a'..='z' | '0'..='9' | '+' | '/' | '=' | '-' | '_'),
+            )
+    }
+    fn is_e2ee_envelope(body: &str) -> bool {
+        if !body.starts_with("v1:") {
+            return false;
+        }
+        let parts: Vec<&str> = body.split(':').collect();
+        if parts.len() != 4 {
+            return false;
+        }
+        let (_v, eph, nonce, ct) = (parts[0], parts[1], parts[2], parts[3]);
+        is_base64ish(eph) && is_base64ish(nonce) && is_base64ish(ct)
+    }
+    if !is_e2ee_envelope(&body) {
+        return Err("E2EE required: body must be an opaque v1 envelope".to_string());
+    }
+    let tx = {
+        let g = SESSIONS.lock().unwrap();
+        g.get(&user_id).cloned()
+    };
+    let Some(tx) = tx else {
+        return Err("No active stream session for user".to_string());
+    };
+
+    #[derive(serde::Serialize)]
+    struct OutgoingDMIdent {
+        to_identity: String,
+        body: String,
+    }
+    let req = OutgoingDMIdent { to_identity, body };
     let env = ClientMessage {
         command: "message".to_string(),
         data: serde_json::to_string(&req).map_err(|e| format!("Serialize error: {e}"))?,
@@ -832,18 +845,25 @@ fn make_tls_stream(
 fn auth_over_stream(
     tls: &mut StreamOwned<ClientConnection, TcpStream>,
     command: &str,
-    passphrase: String,
+    _passphrase: String,
     password: String,
 ) -> Result<LoginResponse, String> {
     let _ = read_line(tls);
-    let auth = AuthRequest {
-        passphrase,
-        password,
-        identity_key: None,
+    // Ensure local store is unlocked and an identity exists so we can always send identity_key
+    let _ = crate::security::unlock_local(&password);
+    let identity_key = match crate::security::load_identity()? {
+        Some(bundle) => Some(bundle.user_id),
+        None => {
+            // First run: generate identity (ed25519 pk + random user_id)
+            let bundle = crate::security::generate_and_store_identity()?;
+            Some(bundle.user_id)
+        }
     };
+
+    let payload = serde_json::json!({ "id": identity_key.unwrap_or_default() });
     let env = ClientMessage {
         command: command.to_string(),
-        data: serde_json::to_string(&auth).map_err(|e| format!("Serialize error: {e}"))?,
+        data: payload.to_string(),
     };
     let mut line = serde_json::to_string(&env).map_err(|e| format!("Serialize error: {e}"))?;
     line.push('\n');
@@ -856,12 +876,23 @@ fn auth_over_stream(
     if wrapper.command != "auth_response" {
         return Err(format!("Unexpected command: {}", wrapper.command));
     }
-    let resp: AuthResponse = serde_json::from_str(&wrapper.data)
+    let resp_val: serde_json::Value = serde_json::from_str(&wrapper.data)
         .map_err(|e| format!("Invalid auth_response data: {e}"))?;
+    let resp: AuthResponse = serde_json::from_value(resp_val.clone())
+        .map_err(|e| format!("Invalid auth_response shape: {e}"))?;
+    let user_id = if let Some(uid) = resp.user_id {
+        Some(uid)
+    } else if let Some(id_str) = resp_val.get("id").and_then(|v| v.as_str()) {
+        Some(session_id_from_identity(id_str)?)
+    } else if let Some(id_local) = crate::security::load_identity()?.map(|b| b.user_id) {
+        Some(session_id_from_identity(&id_local)?)
+    } else {
+        None
+    };
     Ok(LoginResponse {
         success: resp.success,
         message: resp.message,
-        user_id: resp.user_id,
+        user_id,
     })
 }
 
@@ -902,15 +933,31 @@ pub fn login_and_load_local_history_tls(
     password: String,
     limit: Option<usize>,
 ) -> Result<HistoryBundle, String> {
+    // Check if data directory exists - must exist for login
+    if !crate::security::data_dir_exists() {
+        return Err("No account found. Please register first.".to_string());
+    }
+
+    if host.trim().is_empty() || port == 0 {
+        // Offline unlock: use existing account
+        crate::security::unlock_local(&password)?;
+        crate::local_storage::init_storage()?;
+        let messages = load_local_history(limit)?;
+        return Ok(HistoryBundle {
+            success: true,
+            message: "Unlocked local storage".to_string(),
+            user_id: None,
+            messages,
+        });
+    }
+
     let mut tls = make_tls_stream(&host, port, &ca_pem)?;
     let login = auth_over_stream(&mut tls, "login", passphrase, password)?;
     tls.conn.send_close_notify();
     let _ = tls.flush();
     let mut messages = Vec::new();
     if login.success {
-        if let Some(uid) = login.user_id {
-            messages = load_local_history(uid, limit)?;
-        }
+        messages = load_local_history(limit)?;
     }
     Ok(HistoryBundle {
         success: login.success,
@@ -931,15 +978,37 @@ pub fn register_and_load_local_history_tls(
     password: String,
     limit: Option<usize>,
 ) -> Result<HistoryBundle, String> {
+    // Check if data directory exists - must NOT exist for register
+    if crate::security::data_dir_exists() {
+        return Err("Account already exists. Please login instead.".to_string());
+    }
+
+    if host.trim().is_empty() || port == 0 {
+        // Offline register: create a new local account
+        crate::security::unlock_local(&password)?;
+        crate::local_storage::init_storage()?;
+        let _ = crate::security::generate_and_store_identity()?;
+        let _ = crate::local_storage::snapshot_persistent();
+        let messages = load_local_history(limit)?;
+        return Ok(HistoryBundle {
+            success: true,
+            message: "Local account created".to_string(),
+            user_id: None,
+            messages,
+        });
+    }
+
     let mut tls = make_tls_stream(&host, port, &ca_pem)?;
     let reg = auth_over_stream(&mut tls, "register", passphrase, password)?;
     tls.conn.send_close_notify();
     let _ = tls.flush();
     let mut messages = Vec::new();
     if reg.success {
-        if let Some(uid) = reg.user_id {
-            messages = load_local_history(uid, limit)?;
+        // Generate identity after successful server registration if missing
+        if crate::security::load_identity()?.is_none() {
+            let _ = crate::security::generate_and_store_identity()?;
         }
+        messages = load_local_history(limit)?;
     }
     Ok(HistoryBundle {
         success: reg.success,
@@ -1012,5 +1081,86 @@ mod tests {
         let mut c = Cursor::new(b"no newline here".as_slice());
         let line = read_line(&mut c).expect("read_line");
         assert_eq!(line, "no newline here");
+    }
+
+    fn sample_envelope() -> String {
+        // v1:<b64 eph>:<b64 nonce>:<b64 ciphertext>
+        "v1:RU5WUEs=:Tk9OQ0U=:Q0lQSEVSVEVYVA==".to_string()
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn send_direct_message_over_stream_serializes_envelope() {
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        {
+            let mut g = SESSIONS.lock().unwrap();
+            g.insert(42, tx);
+        }
+        let body = sample_envelope();
+        let res = send_direct_message_over_stream(42, 7, body.clone());
+        assert!(res.is_ok());
+        let line = rx.recv().expect("expected enqueued send");
+        let wrap: ClientMessage = serde_json::from_str(line.trim()).expect("json parse");
+        assert_eq!(wrap.command, "message");
+        let v: serde_json::Value = serde_json::from_str(&wrap.data).expect("payload parse");
+        assert_eq!(v.get("to_user_id").and_then(|n| n.as_i64()), Some(7));
+        assert_eq!(v.get("body").and_then(|s| s.as_str()), Some(body.as_str()));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn send_direct_message_over_stream_to_identity_serializes_envelope() {
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        {
+            let mut g = SESSIONS.lock().unwrap();
+            g.insert(99, tx);
+        }
+        let body = sample_envelope();
+        let res =
+            send_direct_message_over_stream_to_identity(99, "RID123".to_string(), body.clone());
+        assert!(res.is_ok());
+        let line = rx.recv().expect("expected enqueued send");
+        let wrap: ClientMessage = serde_json::from_str(line.trim()).expect("json parse");
+        assert_eq!(wrap.command, "message");
+        let v: serde_json::Value = serde_json::from_str(&wrap.data).expect("payload parse");
+        assert_eq!(
+            v.get("to_identity").and_then(|s| s.as_str()),
+            Some("RID123")
+        );
+        assert_eq!(v.get("body").and_then(|s| s.as_str()), Some(body.as_str()));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn offline_login_loads_local_history() {
+        // Isolate store to a temp dir to avoid cross-test interference
+        let temp = tempfile::tempdir().expect("tempdir");
+        #[allow(unused_unsafe)]
+        unsafe {
+            std::env::set_var("RURA_CLIENT_DATA_DIR", temp.path());
+        }
+        crate::security::reset_key_for_tests();
+        crate::security::unlock_local("test-pass").expect("unlock");
+        crate::local_storage::reset_store_for_tests();
+        crate::local_storage::init_storage().expect("init storage");
+        crate::local_storage::append_persistent_message(
+            1,
+            2,
+            "hi".to_string(),
+            "2024-01-01T00:00:00Z".to_string(),
+        )
+        .expect("append");
+
+        let bundle = login_and_load_local_history_tls(
+            "".to_string(),
+            0,
+            "".to_string(),
+            "".to_string(),
+            "test-pass".to_string(),
+            Some(100),
+        )
+        .expect("offline load");
+        assert!(bundle.success);
+        assert!(bundle.messages.iter().any(|m| m.body == "hi"));
     }
 }

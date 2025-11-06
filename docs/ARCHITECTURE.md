@@ -80,14 +80,13 @@ Docs: [PROTOCOL.md](PROTOCOL.md) and [DATABASE.md](DATABASE.md) remain valid and
   - `ClientMessage { command, data }`
   - `AuthRequest { passphrase, password }`, `AuthResponse { success, message, user_id }`
 - `messaging`:
-  - `DirectMessageReq { to_user_id, body, saved? }`
+  - `DirectMessageReq { to_user_id, body }`
   - `DirectMessageEvent { from_user_id, body }`
-  - `SaveRequest { message_id, saved? }`, `SaveResponse { success, message, message_id?, saved? }`
 
 ## Request Flow
 1) TCP connect → TLS handshake → server sends `{"command":"auth_required", ...}`.
 2) `auth::handlers::handle_auth` processes `login`/`register`, returns `Some(user_id)` on success; the loop registers the user and enables outbound channel.
-3) Post-auth: `message` → persist to DB and deliver to online recipient; `save` → toggle `saved` flag and respond with `save_response`.
+3) Post-auth: `message` → deliver to online recipient. Messages are persisted on the client by default; server does not store message content.
 4) Errors: non-auth before auth → `error`; invalid JSON → `error`; invalid payloads → `error`; unknown recipient → persisted only.
 
 ## TLS Note

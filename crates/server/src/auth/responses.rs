@@ -28,6 +28,33 @@ where
     stream.flush().await
 }
 
+/// Identity-based success response: includes string `id` and omits numeric user_id.
+pub async fn send_auth_success_response_identity<W>(
+    stream: &mut W,
+    id: &str,
+    message: &str,
+) -> tokio::io::Result<()>
+where
+    W: AsyncWrite + Unpin,
+{
+    // Build a lightweight payload that older clients can ignore extra fields from.
+    let data = serde_json::json!({
+        "success": true,
+        "message": message,
+        "id": id,
+    });
+    let response = ClientMessage {
+        command: "auth_response".to_string(),
+        data: data.to_string(),
+    };
+    let response_str = serde_json::to_string(&response)? + "\n";
+    if debug_io_enabled() {
+        println!(">>> [auth] {}", response_str.trim_end());
+    }
+    stream.write_all(response_str.as_bytes()).await?;
+    stream.flush().await
+}
+
 pub async fn send_auth_error_response<W>(stream: &mut W, message: &str) -> tokio::io::Result<()>
 where
     W: AsyncWrite + Unpin,

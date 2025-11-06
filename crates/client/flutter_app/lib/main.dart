@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'frb/api.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'frb/frb_generated.dart';
 
 // App color palette
@@ -184,20 +185,40 @@ class SessionConfig {
 }
 
 class _HomePageState extends State<HomePage> {
-  final _host = TextEditingController(text: 'localhost');
+  final _host = TextEditingController(text: '127.0.0.1');
   final _port = TextEditingController(text: '8443');
-  final _certPath = TextEditingController(text: '../../../certs/ca.crt');
-  final _passphrase = TextEditingController(text: 'alice');
   final _password = TextEditingController(text: 'secret');
   String _status = 'Ready';
+  bool _hasLocal = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _detectLocal();
+  }
+
+  Future<void> _detectLocal() async {
+    try {
+      // Prefer env override if present, else default to ../data (same as Rust side)
+      final envDir = Platform.environment['RURA_CLIENT_DATA_DIR'];
+      final dir = envDir != null && envDir.trim().isNotEmpty
+          ? Directory(envDir)
+          : Directory('../data');
+      final exists = await dir.exists();
+      if (mounted) setState(() => _hasLocal = exists);
+    } catch (_) {
+      if (mounted) setState(() => _hasLocal = false);
+    }
+  }
 
   Future<void> _authAndShowHistory({required bool register}) async {
     setState(() => _status = register ? 'Registering...' : 'Logging in...');
     try {
       final host = _host.text.trim();
       final port = int.tryParse(_port.text.trim()) ?? 8443;
-      final caPem = await File(_certPath.text.trim()).readAsString();
-      final pass = _passphrase.text;
+      // Load CA from bundled assets
+      final caPem = await rootBundle.loadString('assets/ca.crt');
+      final pass = '';
       final pwd = _password.text;
 
       // Stream-first login: open the persistent stream (this logs in inside Rust)
@@ -230,7 +251,7 @@ class _HomePageState extends State<HomePage> {
 
       // Load initial history from local cache to avoid re-login overwriting
       // the active stream route on the server.
-      final history = await loadLocalHistory(userId: userId, limit: BigInt.from(500));
+      final history = await loadLocalHistory(limit: BigInt.from(500));
       final bundle = HistoryBundle(
         success: true,
         message: 'OK',
@@ -251,6 +272,8 @@ class _HomePageState extends State<HomePage> {
           builder: (_) => ChatListPage(bundle: bundle, session: session, incoming: stream),
         ),
       );
+      // Re-detect local storage for next time
+      _detectLocal();
     } catch (e) {
       setState(() => _status = '${register ? 'Register' : 'Login'} failed: $e');
     }
@@ -273,27 +296,28 @@ class _HomePageState extends State<HomePage> {
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ),
-            TextField(controller: _host, decoration: const InputDecoration(labelText: 'Host')),
-            TextField(controller: _port, decoration: const InputDecoration(labelText: 'Port')),
-            TextField(controller: _certPath, decoration: const InputDecoration(labelText: 'Cert PEM path')),
+            // Server connection (optional): host/port/CA for online mode
+            TextField(controller: _host, decoration: const InputDecoration(labelText: 'Server host (e.g., 127.0.0.1)')),
+            const SizedBox(height: 8),
+            TextField(controller: _port, decoration: const InputDecoration(labelText: 'Server port (e.g., 8443)'), keyboardType: TextInputType.number),
+            const SizedBox(height: 8),
             const SizedBox(height: 12),
-            TextField(controller: _passphrase, decoration: const InputDecoration(labelText: 'Passphrase')),
+            // Password to unlock local encrypted DB (used in both login and register flows)
             TextField(controller: _password, decoration: const InputDecoration(labelText: 'Password'), obscureText: true),
             const SizedBox(height: 16),
-            Row(
-              children: [
-                ElevatedButton.icon(
-                  onPressed: () => _authAndShowHistory(register: false),
-                  icon: const Icon(Icons.login),
-                  label: const Text('Login'),
-                ),
-                const SizedBox(width: 12),
-                OutlinedButton.icon(
-                  onPressed: () => _authAndShowHistory(register: true),
-                  icon: const Icon(Icons.app_registration),
-                  label: const Text('Register'),
-                ),
-              ],
+            // Single action button: Login if local data exists; otherwise Register
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: () => _authAndShowHistory(register: !_hasLocal),
+                icon: Icon(_hasLocal ? Icons.login : Icons.person_add_alt_1),
+                label: Text(_hasLocal ? 'Login (Server)' : 'Register (Server)'),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              _hasLocal ? 'Existing local data found. Login will reuse it.' : 'No local data found. Register will create it.',
+              style: Theme.of(context).textTheme.bodySmall,
             ),
             const SizedBox(height: 16),
             Text(_status, style: Theme.of(context).textTheme.bodyMedium),
@@ -302,6 +326,30 @@ class _HomePageState extends State<HomePage> {
       ),
     );
   }
+}
+
+extension on Stream<String> {
+  Stream<String> asEmptyBroadcast() => const Stream<String>.empty().asBroadcastStream();
+}
+
+extension on Stream<String>? {
+  Stream<String> orEmptyBroadcast() =>
+      (this ?? const Stream<String>.empty()).asBroadcastStream();
+}
+
+// Derive a stable numeric id from a base64 identity for local storage grouping.
+int idToNumeric(String id) {
+  try {
+    final bytes = base64.decode(id);
+    if (bytes.length >= 8) {
+      var v = 0;
+      for (var i = 0; i < 8; i++) {
+        v = (v << 8) | (bytes[i] & 0xFF);
+      }
+      return v & 0x7FFFFFFFFFFFFFFF; // positive 63-bit
+    }
+  } catch (_) {}
+  return id.hashCode;
 }
 
 class ChatListPage extends StatelessWidget {
@@ -313,25 +361,52 @@ class ChatListPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) => _ChatListScaffold(bundle: bundle, session: session, incoming: incoming);
 
-  static Future<int?> _promptForUserId(BuildContext context) async {
-    final ctrl = TextEditingController();
-    return showDialog<int>(
+  static Future<dynamic> _promptForUserId(BuildContext context) async {
+    final idCtrl = TextEditingController();
+    final pkCtrl = TextEditingController();
+    final nickCtrl = TextEditingController();
+    return showDialog<dynamic>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('New chat'),
-        content: TextField(
-          controller: ctrl,
-          keyboardType: TextInputType.number,
-          decoration: const InputDecoration(labelText: 'User id'),
+        title: const Text('Add contact'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: idCtrl,
+                keyboardType: TextInputType.text,
+                decoration: const InputDecoration(labelText: 'Recipient ID (base64)'),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: pkCtrl,
+                keyboardType: TextInputType.text,
+                decoration: const InputDecoration(labelText: 'Recipient Public Key (base64)'),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: nickCtrl,
+                keyboardType: TextInputType.text,
+                decoration: const InputDecoration(labelText: 'Surname (who is this person?)'),
+              ),
+            ],
+          ),
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
           ElevatedButton(
             onPressed: () {
-              final v = int.tryParse(ctrl.text.trim());
-              Navigator.pop(ctx, v);
+              final rid = idCtrl.text.trim();
+              final pk = pkCtrl.text.trim();
+              final nk = nickCtrl.text.trim();
+              if (rid.isNotEmpty && pk.isNotEmpty) {
+                Navigator.pop(ctx, { 'rid': rid, 'pk': pk, 'nk': nk });
+              } else {
+                Navigator.pop(ctx, null);
+              }
             },
-            child: const Text('Start'),
+            child: const Text('Add'),
           ),
         ],
       ),
@@ -353,6 +428,10 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
   late final Map<int, List<HistoryMessage>> _groups;
   StreamSubscription<String>? _sub;
   final _incoming = StreamController<HistoryMessage>.broadcast();
+  Map<int, String> _nicknames = {};
+  final Map<int, String> _identityByPeer = {};
+
+  String? _reverseIdentityFor(int peer) => _identityByPeer[peer];
 
   @override
   void initState() {
@@ -364,6 +443,18 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
       _groups.putIfAbsent(peer, () => []).add(m);
     }
     _startStream();
+  }
+
+  Future<void> _reloadFromLocal() async {
+    try {
+      final list = await loadLocalHistory(limit: BigInt.from(500));
+      final groups = <int, List<HistoryMessage>>{};
+      for (final m in list) {
+        final peer = m.fromUserId == _selfId ? m.toUserId : m.fromUserId;
+        groups.putIfAbsent(peer, () => []).add(m);
+      }
+      setState(() => _groups = groups);
+    } catch (_) {}
   }
 
   void _startStream() {
@@ -381,13 +472,16 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
           // Already handled by HomePage; ignore here
           return;
         }
-        final from = map['from_user_id'] as int;
-        final bodyRaw = map['body'] as String;
+        // Support both numeric and identity-based events
+        final bool isIdentity = map.containsKey('from_identity');
+        final int from = isIdentity
+            ? idToNumeric((map['from_identity'] ?? '').toString())
+            : (map['from_user_id'] as int);
+        final bodyRaw = map['body'] as String? ?? '';
         final body = _decodeEnvelope(bodyRaw);
         final now = DateTime.now().toIso8601String();
         // Persist to local cache
         await appendLocalMessage(
-          userId: _selfId,
           fromUserId: from,
           toUserId: _selfId,
           body: body,
@@ -399,7 +493,6 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
           toUserId: _selfId,
           body: body,
           timestamp: now,
-          saved: false,
         );
         _incoming.add(msg);
         final peer = from;
@@ -422,10 +515,19 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
 
   @override
   Widget build(BuildContext context) {
-    final items = _groups.entries.toList()
+    // Merge conversations from messages with manually added contacts (no messages yet)
+    final Map<int, List<HistoryMessage>> merged = {}..addAll(_groups);
+    for (final peer in _nicknames.keys) {
+      merged.putIfAbsent(peer, () => <HistoryMessage>[]);
+    }
+    final items = merged.entries.toList()
       ..sort((a, b) {
-        final at = DateTime.tryParse(a.value.last.timestamp) ?? DateTime(0);
-        final bt = DateTime.tryParse(b.value.last.timestamp) ?? DateTime(0);
+        final at = a.value.isNotEmpty
+            ? DateTime.tryParse(a.value.last.timestamp) ?? DateTime(0)
+            : DateTime(0);
+        final bt = b.value.isNotEmpty
+            ? DateTime.tryParse(b.value.last.timestamp) ?? DateTime(0)
+            : DateTime(0);
         return bt.compareTo(at);
       });
     return Scaffold(
@@ -436,49 +538,383 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
         itemBuilder: (context, index) {
           final peerId = items[index].key;
           final msgs = items[index].value;
-          final last = msgs.last;
+          final last = msgs.isNotEmpty ? msgs.last : null;
           return ListTile(
             leading: const CircleAvatar(
               backgroundColor: kSecondary,
               foregroundColor: Colors.black,
               child: Icon(Icons.person),
             ),
-            title: Text('User $peerId'),
-            subtitle: Text(last.body, maxLines: 1, overflow: TextOverflow.ellipsis),
-            trailing: Text(_formatTime(last.timestamp), style: Theme.of(context).textTheme.bodySmall),
-            onTap: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => ChatPage(
-                    session: widget.session,
-                    selfUserId: _selfId,
-                    peerUserId: peerId,
-                    initial: msgs,
-                    inbound: _incoming.stream,
+            title: Text(_nicknames[peerId] ?? 'User $peerId'),
+            subtitle: Text(last?.body ?? '', maxLines: 1, overflow: TextOverflow.ellipsis),
+            trailing: Text(
+              last != null ? _formatTime(last.timestamp) : '',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            onTap: () async {
+              // If we have an identity for this peer (because we added the contact), open identity chat.
+              final rid = _reverseIdentityFor(peerId);
+              if (rid != null) {
+                await Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => ChatIdentityPage(
+                      session: widget.session,
+                      selfUserId: _selfId,
+                      recipientId: rid,
+                      recipientPubKey: '',
+                      recipientName: _nicknames[peerId],
+                      incomingRaw: widget.incoming ?? openMessageStreamTls(
+                        host: widget.session.host,
+                        port: widget.session.port,
+                        caPem: widget.session.caPem,
+                        passphrase: widget.session.passphrase,
+                        password: widget.session.password,
+                      ),
+                    ),
                   ),
-                ),
-              );
+                );
+                await _reloadFromLocal();
+              } else {
+                await Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => ChatPage(
+                      session: widget.session,
+                      selfUserId: _selfId,
+                      peerUserId: peerId,
+                      initial: msgs,
+                      peerName: _nicknames[peerId],
+                      inbound: _incoming.stream,
+                    ),
+                  ),
+                );
+                await _reloadFromLocal();
+              }
             },
           );
         },
       ),
       floatingActionButton: FloatingActionButton(
         onPressed: () async {
-          final peer = await ChatListPage._promptForUserId(context);
-          if (peer == null) return;
-          Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (_) => ChatPage(
-                session: widget.session,
-                selfUserId: _selfId,
-                peerUserId: peer,
-                initial: const [],
-                inbound: _incoming.stream,
+          final sel = await ChatListPage._promptForUserId(context);
+          if (sel == null) return;
+          if (sel is Map && sel['rid'] is String && sel['pk'] is String) {
+            final rid = sel['rid'] as String;
+            final pk = sel['pk'] as String;
+            final nk = (sel['nk'] as String?)?.trim();
+            try { await addContact(userId: rid, pubkey: pk); } catch (_) {}
+            final peer = idToNumeric(rid);
+            setState(() {
+              if ((nk?.isEmpty ?? true) == false) {
+                _nicknames[peer] = nk!;
+              }
+              _identityByPeer[peer] = rid;
+              _groups.putIfAbsent(peer, () => <HistoryMessage>[]);
+            });
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Contact added: ' + (_nicknames[peer] ?? rid.substring(0, 10) + '…'))),
+            );
+          } else if (sel is int) {
+            await Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => ChatPage(
+                  session: widget.session,
+                  selfUserId: _selfId,
+                  peerUserId: sel,
+                  initial: const [],
+                  peerName: _nicknames[sel],
+                  inbound: _incoming.stream,
+                ),
+              ),
+            );
+            await _reloadFromLocal();
+          }
+        },
+        child: const CircleAvatar(
+          backgroundColor: kSecondary,
+          foregroundColor: Colors.black,
+          child: Icon(Icons.person_add_alt_1),
+        ),
+      ),
+    );
+  }
+}
+
+class ChatIdentityPage extends StatefulWidget {
+  final SessionConfig session;
+  final int selfUserId;
+  final String recipientId;
+  final String recipientPubKey;
+  final Stream<String> incomingRaw;
+  final String? recipientName;
+  const ChatIdentityPage({super.key, required this.session, required this.selfUserId, required this.recipientId, required this.recipientPubKey, required this.incomingRaw, this.recipientName});
+  @override
+  State<ChatIdentityPage> createState() => _ChatIdentityPageState();
+}
+
+class _ChatIdentityPageState extends State<ChatIdentityPage> {
+  final _input = TextEditingController();
+  final _scroll = ScrollController();
+  bool _sending = false;
+  final List<HistoryMessage> _messages = [];
+  StreamSubscription<String>? _sub;
+  // Use top-level idToNumeric()
+
+  @override
+  void initState() {
+    super.initState();
+    // Load existing conversation from local DB so the view is not empty
+    _loadFromLocal();
+    _sub = widget.incomingRaw.listen((data) async {
+      try {
+        final map = jsonDecode(data) as Map;
+        if (map['type'] == 'auth_ok') return;
+        final fromId = (map['from_identity'] ?? '').toString();
+        final bodyRaw = map['body'] as String? ?? '';
+        if (fromId == widget.recipientId) {
+          final body = _decodeEnvelope(bodyRaw);
+          final now = DateTime.now().toIso8601String();
+          final peer = idToNumeric(widget.recipientId);
+          await appendLocalMessage(
+            fromUserId: peer,
+            toUserId: widget.selfUserId,
+            body: body,
+            timestamp: now,
+          );
+          setState(() => _messages.add(HistoryMessage(
+            id: 0,
+            fromUserId: peer,
+            toUserId: widget.selfUserId,
+            body: body,
+            timestamp: now,
+          )));
+          if (_scroll.hasClients) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (_scroll.hasClients) {
+                _scroll.jumpTo(_scroll.position.maxScrollExtent + 80);
+              }
+            });
+          }
+        }
+      } catch (_) {}
+    });
+    // No automatic contact handshake; require manual information exchange.
+  }
+
+  Future<void> _loadFromLocal() async {
+    try {
+      final peer = idToNumeric(widget.recipientId);
+      final list = await loadLocalHistory(limit: BigInt.from(1000));
+      final conv = list.where((m) =>
+          (m.fromUserId == peer && m.toUserId == widget.selfUserId) ||
+          (m.fromUserId == widget.selfUserId && m.toUserId == peer)).toList();
+      conv.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+      // Debug print to terminal
+      // ignore: avoid_print
+      print('[ChatIdentity] Loaded ${conv.length} messages with $peer');
+      for (final m in conv) {
+        // ignore: avoid_print
+        print('[${m.timestamp}] ${m.fromUserId} -> ${m.toUserId}: ${m.body}');
+      }
+      if (!mounted) return;
+      setState(() {
+        _messages.clear();
+        _messages.addAll(conv);
+      });
+      // Scroll to bottom
+      if (_scroll.hasClients) {
+        await Future<void>.delayed(const Duration(milliseconds: 16));
+        if (_scroll.hasClients) {
+          _scroll.jumpTo(_scroll.position.maxScrollExtent + 40);
+        }
+      }
+    } catch (e) {
+      // ignore: avoid_print
+      print('[ChatIdentity] Failed to load local history: $e');
+    }
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _send() async {
+    final text = _input.text.trim();
+    if (text.isEmpty) return;
+    setState(() => _sending = true);
+    try {
+      // If the user typed plaintext, wrap into a v1 envelope (dev-only transport wrapper)
+      String body = text;
+      if (!text.startsWith('v1:')) {
+        final b64 = base64.encode(utf8.encode(text));
+        const eph = 'UGxhaW5FcGg='; // "PlainEph"
+        const nonce = 'Tm9uY2U='; // "Nonce"
+        body = 'v1:$eph:$nonce:$b64';
+      }
+      try {
+        await sendDirectMessageOverStreamToIdentity(
+          userId: widget.selfUserId,
+          toIdentity: widget.recipientId,
+          body: body,
+        );
+      } catch (e) {
+        final msg = e.toString();
+        final host = widget.session.host.trim();
+        final port = widget.session.port;
+        if (msg.contains('No active stream session for user') && host.isNotEmpty && port > 0) {
+          // Attempt to open a stream session on-demand, then retry once.
+          final stream = openMessageStreamTls(
+            host: host,
+            port: port,
+            caPem: widget.session.caPem,
+            passphrase: widget.session.passphrase,
+            password: widget.session.password,
+          );
+          _sub?.cancel();
+          _sub = stream.listen((data) async {
+            try {
+              final map = jsonDecode(data) as Map;
+              if (map['type'] == 'auth_ok') return;
+              final fromId = (map['from_identity'] ?? '').toString();
+              final bodyRaw = map['body'] as String? ?? '';
+              if (fromId == widget.recipientId) {
+                final body = _decodeEnvelope(bodyRaw);
+                final now = DateTime.now().toIso8601String();
+                final peer = idToNumeric(widget.recipientId);
+                await appendLocalMessage(
+                  fromUserId: peer,
+                  toUserId: widget.selfUserId,
+                  body: body,
+                  timestamp: now,
+                );
+                setState(() => _messages.add(HistoryMessage(
+                  id: 0,
+                  fromUserId: peer,
+                  toUserId: widget.selfUserId,
+                  body: body,
+                  timestamp: now,
+                )));
+              }
+            } catch (_) {}
+          });
+          await Future.delayed(const Duration(milliseconds: 150));
+          await sendDirectMessageOverStreamToIdentity(
+            userId: widget.selfUserId,
+            toIdentity: widget.recipientId,
+            body: body,
+          );
+        } else {
+          // Show a friendly error, but do not crash UI
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Send failed: ' + msg)),
+          );
+          return;
+        }
+      }
+      final now = DateTime.now().toIso8601String();
+      final peer = idToNumeric(widget.recipientId);
+      await appendLocalMessage(
+        fromUserId: widget.selfUserId,
+        toUserId: peer,
+        body: text,
+        timestamp: now,
+      );
+      final msg = HistoryMessage(
+        id: 0,
+        fromUserId: widget.selfUserId,
+        toUserId: peer,
+        body: text,
+        timestamp: now,
+      );
+      setState(() {
+        _messages.add(msg);
+        _input.clear();
+      });
+      if (_scroll.hasClients) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (_scroll.hasClients) {
+            _scroll.jumpTo(_scroll.position.maxScrollExtent + 80);
+          }
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ridShort = widget.recipientId.length > 10 ? widget.recipientId.substring(0, 10) + '…' : widget.recipientId;
+    final title = widget.recipientName?.isNotEmpty == true ? widget.recipientName! : 'Chat: $ridShort';
+    return Scaffold(
+      appBar: AppBar(title: Text(title)),
+      body: Column(
+        children: [
+          Expanded(
+            child: ListView.builder(
+              controller: _scroll,
+              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+              itemCount: _messages.length,
+              itemBuilder: (context, index) {
+                final m = _messages[index];
+                final fromSelf = m.fromUserId == widget.selfUserId;
+                return Align(
+                  alignment: fromSelf ? Alignment.centerRight : Alignment.centerLeft,
+                  child: Container(
+                    margin: const EdgeInsets.symmetric(vertical: 4),
+                    padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                    constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.7),
+                    decoration: BoxDecoration(
+                      color: fromSelf ? kPrimary : kSecondary,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: fromSelf ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          m.body,
+                          style: TextStyle(color: fromSelf ? Colors.white : Colors.black),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          _formatTime(m.timestamp),
+                          style: Theme.of(context).textTheme.bodySmall?.copyWith(color: fromSelf ? Colors.white70 : const Color(0xCC000000)),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.all(8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _input,
+                      decoration: const InputDecoration(
+                        hintText: 'Type a message',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    onPressed: _sending ? null : _send,
+                    icon: _sending
+                        ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.send),
+                  ),
+                ],
               ),
             ),
-          );
-        },
-        child: const Icon(Icons.chat),
+          ),
+        ],
       ),
     );
   }
@@ -490,7 +926,8 @@ class ChatPage extends StatefulWidget {
   final int peerUserId;
   final List<HistoryMessage> initial;
   final Stream<HistoryMessage>? inbound;
-  const ChatPage({super.key, required this.session, required this.selfUserId, required this.peerUserId, required this.initial, this.inbound});
+  final String? peerName;
+  const ChatPage({super.key, required this.session, required this.selfUserId, required this.peerUserId, required this.initial, this.inbound, this.peerName});
 
   @override
   State<ChatPage> createState() => _ChatPageState();
@@ -507,6 +944,8 @@ class _ChatPageState extends State<ChatPage> {
   void initState() {
     super.initState();
     _messages = List.of(widget.initial);
+    // Replace with full history for this peer from local DB
+    _loadFromLocal();
     _inSub = widget.inbound?.listen((m) {
       if (m.fromUserId == widget.peerUserId) {
         setState(() => _messages.add(m));
@@ -519,6 +958,36 @@ class _ChatPageState extends State<ChatPage> {
         }
       }
     });
+  }
+
+  Future<void> _loadFromLocal() async {
+    try {
+      final list = await loadLocalHistory(limit: BigInt.from(1000));
+      final conv = list.where((m) =>
+          (m.fromUserId == widget.peerUserId && m.toUserId == widget.selfUserId) ||
+          (m.fromUserId == widget.selfUserId && m.toUserId == widget.peerUserId)).toList();
+      conv.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+      // Debug print to terminal
+      // ignore: avoid_print
+      print('[Chat] Loaded ${conv.length} messages with ${widget.peerUserId}');
+      for (final m in conv) {
+        // ignore: avoid_print
+        print('[${m.timestamp}] ${m.fromUserId} -> ${m.toUserId}: ${m.body}');
+      }
+      if (!mounted) return;
+      setState(() {
+        _messages = conv;
+      });
+      if (_scroll.hasClients) {
+        await Future<void>.delayed(const Duration(milliseconds: 16));
+        if (_scroll.hasClients) {
+          _scroll.jumpTo(_scroll.position.maxScrollExtent + 40);
+        }
+      }
+    } catch (e) {
+      // ignore: avoid_print
+      print('[Chat] Failed to load local history: $e');
+    }
   }
 
   Future<void> _send() async {
@@ -542,12 +1011,10 @@ class _ChatPageState extends State<ChatPage> {
         userId: widget.selfUserId,
         toUserId: widget.peerUserId,
         body: body,
-        saved: false,
       );
       final now = DateTime.now().toIso8601String();
       // Persist to local cache (sender side) as plaintext
       await appendLocalMessage(
-        userId: widget.selfUserId,
         fromUserId: widget.selfUserId,
         toUserId: widget.peerUserId,
         body: text,
@@ -560,7 +1027,6 @@ class _ChatPageState extends State<ChatPage> {
           toUserId: widget.peerUserId,
           body: text,
           timestamp: now,
-          saved: false,
         ));
         _input.clear();
       });
@@ -591,9 +1057,7 @@ class _ChatPageState extends State<ChatPage> {
     final self = widget.selfUserId;
     final msgs = _messages.where((m) => m.fromUserId == widget.peerUserId || m.toUserId == widget.peerUserId).toList();
     return Scaffold(
-      appBar: AppBar(
-        title: Text('User ${widget.peerUserId}'),
-      ),
+      appBar: AppBar(title: Text(widget.peerName?.isNotEmpty == true ? widget.peerName! : 'User ${widget.peerUserId}')),
       body: Column(
         children: [
           Expanded(
@@ -671,6 +1135,69 @@ class _ChatPageState extends State<ChatPage> {
         ],
       ),
     );
+  }
+}
+
+extension _OfflineNav on _HomePageState {
+  Future<void> _unlockAndShowHistory() async {
+    setState(() => _status = 'Unlocking local...');
+    try {
+      final pwd = _password.text;
+      // Use offline branch: host empty, port 0
+      final bundle = await loginAndLoadLocalHistoryTls(
+        host: '',
+        port: 0,
+        caPem: '',
+        passphrase: '',
+        password: pwd,
+        limit: BigInt.from(500),
+      );
+      if (!mounted) return;
+      // No stream in offline mode
+      final session = SessionConfig(host: '', port: 0, caPem: '', passphrase: '', password: pwd);
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => ChatListPage(bundle: bundle, session: session, incoming: const Stream<String>.empty()),
+        ),
+      );
+      setState(() => _status = 'Unlocked');
+    } catch (e) {
+      setState(() => _status = 'Unlock failed: $e');
+    }
+  }
+
+  Future<void> _registerLocal() async {
+    setState(() => _status = 'Registering local...');
+    try {
+      final pwd = _password.text;
+      final bundle = await registerAndLoadLocalHistoryTls(
+        host: '',
+        port: 0,
+        caPem: '',
+        passphrase: '',
+        password: pwd,
+        limit: BigInt.from(500),
+      );
+      
+      // TEMPORARY: Print the generated account ID
+      try {
+        final accountId = await getAccountId();
+        print('TEMPORARY: $accountId');
+      } catch (e) {
+        print('TEMPORARY: Failed to get account ID: $e');
+      }
+      
+      if (!mounted) return;
+      final session = SessionConfig(host: '', port: 0, caPem: '', passphrase: '', password: pwd);
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => ChatListPage(bundle: bundle, session: session, incoming: const Stream<String>.empty()),
+        ),
+      );
+      setState(() => _status = 'Registered');
+    } catch (e) {
+      setState(() => _status = 'Register failed: $e');
+    }
   }
 }
 

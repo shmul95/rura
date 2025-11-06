@@ -161,7 +161,6 @@ class HistoryPage extends StatelessWidget {
           return ListTile(
             title: Text(m.body),
             subtitle: Text('from ${m.fromUserId} → ${m.toUserId} • ${m.timestamp}'),
-            trailing: m.saved == true ? const Icon(Icons.bookmark, size: 18) : null,
           );
         },
       ),

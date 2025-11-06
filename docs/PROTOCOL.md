@@ -45,8 +45,7 @@ Client → Server (send)
   - E2EE recommended: treat `body` as opaque ciphertext (base64), containing an application-defined envelope. One suggested format:
     - `v1:<b64_ephemeral_pub>:<b64_nonce>:<b64_ciphertext>`
     - Where ciphertext is an AEAD over the cleartext payload; the server does not parse it.
-  - Optional: `saved` boolean to mark the message as retained on the server (retention hint only; not application semantics)
-    - `{"command":"message","data":"{\"to_user_id\":3,\"body\":\"v1:...\",\"saved\":true}"}`
+  - No server-side retention flags are supported. Persistence is handled on the client.
 
 Server → Recipient (deliver)
 - Direct message event (inside `data`):
