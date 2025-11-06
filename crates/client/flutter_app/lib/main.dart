@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'frb/api.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'frb/frb_generated.dart';
 
 // App color palette
@@ -186,7 +187,6 @@ class SessionConfig {
 class _HomePageState extends State<HomePage> {
   final _host = TextEditingController(text: '127.0.0.1');
   final _port = TextEditingController(text: '8443');
-  final _certPath = TextEditingController(text: '../../certs/ca.crt');
   final _password = TextEditingController(text: 'secret');
   String _status = 'Ready';
   bool _hasLocal = false;
@@ -216,7 +216,8 @@ class _HomePageState extends State<HomePage> {
     try {
       final host = _host.text.trim();
       final port = int.tryParse(_port.text.trim()) ?? 8443;
-      final caPem = await File(_certPath.text.trim()).readAsString();
+      // Load CA from bundled assets
+      final caPem = await rootBundle.loadString('assets/ca.crt');
       final pass = '';
       final pwd = _password.text;
 
@@ -300,7 +301,6 @@ class _HomePageState extends State<HomePage> {
             const SizedBox(height: 8),
             TextField(controller: _port, decoration: const InputDecoration(labelText: 'Server port (e.g., 8443)'), keyboardType: TextInputType.number),
             const SizedBox(height: 8),
-            TextField(controller: _certPath, decoration: const InputDecoration(labelText: 'CA cert path (e.g., certs/ca.crt)')),
             const SizedBox(height: 12),
             // Password to unlock local encrypted DB (used in both login and register flows)
             TextField(controller: _password, decoration: const InputDecoration(labelText: 'Password'), obscureText: true),
