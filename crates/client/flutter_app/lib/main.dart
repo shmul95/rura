@@ -575,6 +575,7 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
                     ),
                   ),
                 );
+                await _reloadFromLocal();
               }
             },
           );
@@ -647,6 +648,8 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
   @override
   void initState() {
     super.initState();
+    // Load existing conversation from local DB so the view is not empty
+    _loadFromLocal();
     _sub = widget.incomingRaw.listen((data) async {
       try {
         final map = jsonDecode(data) as Map;
@@ -681,6 +684,39 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
       } catch (_) {}
     });
     // No automatic contact handshake; require manual information exchange.
+  }
+
+  Future<void> _loadFromLocal() async {
+    try {
+      final peer = idToNumeric(widget.recipientId);
+      final list = await loadLocalHistory(limit: BigInt.from(1000));
+      final conv = list.where((m) =>
+          (m.fromUserId == peer && m.toUserId == widget.selfUserId) ||
+          (m.fromUserId == widget.selfUserId && m.toUserId == peer)).toList();
+      conv.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+      // Debug print to terminal
+      // ignore: avoid_print
+      print('[ChatIdentity] Loaded ${conv.length} messages with $peer');
+      for (final m in conv) {
+        // ignore: avoid_print
+        print('[${m.timestamp}] ${m.fromUserId} -> ${m.toUserId}: ${m.body}');
+      }
+      if (!mounted) return;
+      setState(() {
+        _messages.clear();
+        _messages.addAll(conv);
+      });
+      // Scroll to bottom
+      if (_scroll.hasClients) {
+        await Future<void>.delayed(const Duration(milliseconds: 16));
+        if (_scroll.hasClients) {
+          _scroll.jumpTo(_scroll.position.maxScrollExtent + 40);
+        }
+      }
+    } catch (e) {
+      // ignore: avoid_print
+      print('[ChatIdentity] Failed to load local history: $e');
+    }
   }
 
   @override
@@ -892,6 +928,8 @@ class _ChatPageState extends State<ChatPage> {
   void initState() {
     super.initState();
     _messages = List.of(widget.initial);
+    // Replace with full history for this peer from local DB
+    _loadFromLocal();
     _inSub = widget.inbound?.listen((m) {
       if (m.fromUserId == widget.peerUserId) {
         setState(() => _messages.add(m));
@@ -904,6 +942,36 @@ class _ChatPageState extends State<ChatPage> {
         }
       }
     });
+  }
+
+  Future<void> _loadFromLocal() async {
+    try {
+      final list = await loadLocalHistory(limit: BigInt.from(1000));
+      final conv = list.where((m) =>
+          (m.fromUserId == widget.peerUserId && m.toUserId == widget.selfUserId) ||
+          (m.fromUserId == widget.selfUserId && m.toUserId == widget.peerUserId)).toList();
+      conv.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+      // Debug print to terminal
+      // ignore: avoid_print
+      print('[Chat] Loaded ${conv.length} messages with ${widget.peerUserId}');
+      for (final m in conv) {
+        // ignore: avoid_print
+        print('[${m.timestamp}] ${m.fromUserId} -> ${m.toUserId}: ${m.body}');
+      }
+      if (!mounted) return;
+      setState(() {
+        _messages = conv;
+      });
+      if (_scroll.hasClients) {
+        await Future<void>.delayed(const Duration(milliseconds: 16));
+        if (_scroll.hasClients) {
+          _scroll.jumpTo(_scroll.position.maxScrollExtent + 40);
+        }
+      }
+    } catch (e) {
+      // ignore: avoid_print
+      print('[Chat] Failed to load local history: $e');
+    }
   }
 
   Future<void> _send() async {
