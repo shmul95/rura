@@ -507,10 +507,7 @@ pub fn send_direct_message_tls(
         to_user_id: i64,
         body: String,
     }
-    let req = OutgoingDM {
-        to_user_id,
-        body,
-    };
+    let req = OutgoingDM { to_user_id, body };
     let env = ClientMessage {
         command: "message".to_string(),
         data: serde_json::to_string(&req).map_err(|e| format!("Serialize error: {e}"))?,
@@ -736,10 +733,7 @@ pub fn send_direct_message_over_stream(
         to_user_id: i64,
         body: String,
     }
-    let req = OutgoingDM2 {
-        to_user_id,
-        body,
-    };
+    let req = OutgoingDM2 { to_user_id, body };
     let env = ClientMessage {
         command: "message".to_string(),
         data: serde_json::to_string(&req).map_err(|e| format!("Serialize error: {e}"))?,
@@ -790,10 +784,7 @@ pub fn send_direct_message_over_stream_to_identity(
         to_identity: String,
         body: String,
     }
-    let req = OutgoingDMIdent {
-        to_identity,
-        body,
-    };
+    let req = OutgoingDMIdent { to_identity, body };
     let env = ClientMessage {
         command: "message".to_string(),
         data: serde_json::to_string(&req).map_err(|e| format!("Serialize error: {e}"))?,
