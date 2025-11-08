@@ -182,11 +182,7 @@ fn get_or_create_peer(user_id: i64, remote_id: i64) -> Result<Peer, String> {
                     let mut slot = dc_slot_for_close.lock().await;
                     *slot = None;
                 };
-                if tokio::runtime::Handle::try_current().is_ok() {
-                    tokio::spawn(fut);
-                } else {
-                    RT.block_on(fut);
-                }
+                RT.block_on(fut);
                 // Small delayed re-offer; use thread sleep to avoid needing timers here
                 std::thread::spawn(move || {
                     std::thread::sleep(std::time::Duration::from_millis(200));
@@ -268,6 +264,35 @@ pub fn ensure_offer(user_id: i64, remote_id: i64) -> Result<(), String> {
                         neg.store(false, std::sync::atomic::Ordering::SeqCst);
                         Box::pin(async {})
                     }
+                }));
+                // Attach on_message for initiator as well, so it can receive.
+                let my_user = user_id;
+                dc.on_message(Box::new(move |msg: DataChannelMessage| {
+                    let my_user = my_user;
+                    Box::pin(async move {
+                        if let Ok(text) = std::str::from_utf8(&msg.data) {
+                            emit_inbound(my_user, text.to_string());
+                        }
+                    })
+                }));
+                // Attach on_close symmetric to receiver path
+                let dc_slot_clear = Arc::clone(&dc_slot);
+                let open_for_close = Arc::clone(&open_flag);
+                let neg_for_close = Arc::clone(&neg_flag);
+                dc.on_close(Box::new(move || {
+                    open_for_close.store(false, std::sync::atomic::Ordering::SeqCst);
+                    neg_for_close.store(false, std::sync::atomic::Ordering::SeqCst);
+                    let fut = async {
+                        let mut slot = dc_slot_clear.lock().await;
+                        *slot = None;
+                    };
+                    RT.block_on(fut);
+                    // Re-offer after a short delay
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(200));
+                        let _ = crate::webrtc::ensure_offer(user_id, remote_id);
+                    });
+                    Box::pin(async {})
                 }));
             }
         }

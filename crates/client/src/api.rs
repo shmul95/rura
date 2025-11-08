@@ -809,12 +809,8 @@ pub fn send_direct_message_over_stream_to_identity(
     let remote_id = crate::webrtc::session_id_from_identity(&to_identity)
         .map_err(|_| "Invalid recipient identity".to_string())?;
     let _ = crate::webrtc::ensure_offer_to_identity(user_id, &to_identity);
-    let from_identity = crate::security::load_identity()
-        .map_err(|e| format!("identity: {e}"))?
-        .map(|b| b.user_id)
-        .unwrap_or_default();
     let event = serde_json::json!({
-        "from_identity": from_identity,
+        "from_user_id": user_id,
         "body": body,
     })
     .to_string();
