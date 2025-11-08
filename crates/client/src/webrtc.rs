@@ -195,7 +195,12 @@ fn get_or_create_peer(user_id: i64, remote_id: i64) -> Result<Peer, String> {
                 let this_user = this_user;
                 Box::pin(async move {
                     if let Ok(text) = std::str::from_utf8(&msg.data) {
-                        println!("[rtc] rx (user {}) {} bytes: {}", this_user, text.len(), text);
+                        println!(
+                            "[rtc] rx (user {}) {} bytes: {}",
+                            this_user,
+                            text.len(),
+                            text
+                        );
                         emit_inbound(this_user, text.to_string());
                     }
                 })
@@ -218,9 +223,7 @@ pub fn ensure_offer(user_id: i64, remote_id: i64) -> Result<(), String> {
     let peer = get_or_create_peer(user_id, remote_id)?;
     // If already open or in progress, do nothing.
     if peer.open.load(std::sync::atomic::Ordering::SeqCst)
-        || peer
-            .negotiating
-            .load(std::sync::atomic::Ordering::SeqCst)
+        || peer.negotiating.load(std::sync::atomic::Ordering::SeqCst)
     {
         return Ok(());
     }

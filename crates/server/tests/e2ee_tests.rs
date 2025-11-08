@@ -145,13 +145,13 @@ async fn pubkey_set_and_get_and_opaque_message_flow() {
     assert!(err_env.data.contains("WebRTC"));
 
     // Bob should NOT receive a relayed message over TCP (expect timeout)
-    use tokio::time::{timeout, Duration};
+    use tokio::time::{Duration, timeout};
     let mut buf = [0u8; 1024];
     let no_recv = match timeout(Duration::from_millis(50), c2.read(&mut buf)).await {
-        Err(_) => true,            // timeout elapsed: no data
-        Ok(Ok(0)) => true,         // closed
-        Ok(Ok(_n)) => false,       // data received (unexpected)
-        Ok(Err(_)) => true,        // read error treated as no delivery
+        Err(_) => true,      // timeout elapsed: no data
+        Ok(Ok(0)) => true,   // closed
+        Ok(Ok(_n)) => false, // data received (unexpected)
+        Ok(Err(_)) => true,  // read error treated as no delivery
     };
     assert!(no_recv);
 

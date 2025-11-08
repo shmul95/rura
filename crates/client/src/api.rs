@@ -141,7 +141,10 @@ pub fn list_contacts_json() -> Result<String, String> {
 
 /// Encrypt plaintext for a contact identity using their published public key.
 #[frb]
-pub fn encrypt_message_for_identity(to_identity: String, plaintext: String) -> Result<String, String> {
+pub fn encrypt_message_for_identity(
+    to_identity: String,
+    plaintext: String,
+) -> Result<String, String> {
     crate::local_storage::init_storage()?;
     let pk = crate::local_storage::get_contact_pubkey(&to_identity)?
         .ok_or_else(|| "Recipient not found or missing pubkey".to_string())?;

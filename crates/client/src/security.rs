@@ -131,10 +131,10 @@ pub(crate) fn reset_key_for_tests() {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct IdentityBundle {
-    pub scheme: String,      // e.g., "ed25519-v1"
-    pub public_b64: String,  // Ed25519 public key (base64)
-    pub pkcs8_b64: String,   // Ed25519 PKCS#8 private+public (base64)
-    pub user_id: String,     // 256-bit random identifier (base64)
+    pub scheme: String,     // e.g., "ed25519-v1"
+    pub public_b64: String, // Ed25519 public key (base64)
+    pub pkcs8_b64: String,  // Ed25519 PKCS#8 private+public (base64)
+    pub user_id: String,    // 256-bit random identifier (base64)
     // Static X25519 keys for E2EE (optional for legacy identities)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub x25519_pub_b64: Option<String>,
@@ -194,9 +194,8 @@ pub fn load_identity() -> Result<Option<IdentityBundle>, String> {
         b.x25519_priv_b64 = Some(general_purpose::STANDARD.encode(x_sk.to_bytes()));
         b.x25519_pub_b64 = Some(general_purpose::STANDARD.encode(x_pk.as_bytes()));
         // Persist upgraded identity
-        let enc = encrypt_blob(
-            &serde_json::to_vec(&b).map_err(|e| format!("identity serialize: {e}"))?,
-        )?;
+        let enc =
+            encrypt_blob(&serde_json::to_vec(&b).map_err(|e| format!("identity serialize: {e}"))?)?;
         fs::write(identity_path(), enc).map_err(|e| format!("write identity: {e}"))?;
     }
     Ok(Some(b))
@@ -234,7 +233,9 @@ pub fn encrypt_for_recipient(plaintext: &[u8], recipient_pub_b64: &str) -> Resul
     // Generate ephemeral key pair
     let eph_sk = x25519_dalek::StaticSecret::random_from_rng(rand::thread_rng());
     let eph_pk = x25519_dalek::PublicKey::from(&eph_sk);
-    let shared = eph_sk.diffie_hellman(&x25519_dalek::PublicKey::from(recip)).to_bytes();
+    let shared = eph_sk
+        .diffie_hellman(&x25519_dalek::PublicKey::from(recip))
+        .to_bytes();
     let key_bytes = hkdf_derive_key(&shared);
     let cipher = XChaCha20Poly1305::new((&key_bytes).into());
     let mut nonce = [0u8; 24];

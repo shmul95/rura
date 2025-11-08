@@ -6,7 +6,7 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 async fn setup_memory_db() -> Arc<Mutex<Connection>> {
     let conn = Connection::open(":memory:").unwrap();
@@ -137,10 +137,10 @@ async fn test_full_auth_and_dm_persistence_and_save() {
     // c2 should NOT receive a message event over TCP (expect timeout)
     let mut buf = [0u8; 1024];
     let no_recv = match timeout(Duration::from_millis(50), c2.read(&mut buf)).await {
-        Err(_) => true,            // timeout elapsed: no data
-        Ok(Ok(0)) => true,         // closed
-        Ok(Ok(_n)) => false,       // data received (unexpected)
-        Ok(Err(_)) => true,        // read error treated as no delivery
+        Err(_) => true,      // timeout elapsed: no data
+        Ok(Ok(0)) => true,   // closed
+        Ok(Ok(_n)) => false, // data received (unexpected)
+        Ok(Err(_)) => true,  // read error treated as no delivery
     };
     assert!(no_recv);
 
