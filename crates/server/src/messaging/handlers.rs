@@ -2,9 +2,7 @@ use rusqlite::Connection;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use crate::models::client_message::ClientMessage;
-use crate::webrtc;
-use crate::webrtc::handler::identity_to_session_id;
+// No longer emitting ClientMessage from server for DM relay.
 
 use super::models::DirectMessageReq;
 use super::state::AppState;
@@ -15,26 +13,9 @@ pub async fn send_direct(
     from_user_id: i64,
     req: DirectMessageReq,
 ) -> tokio::io::Result<()> {
-    // If an RTC session is active between peers, do not relay over TCP/TLS.
-    if webrtc::has_active_session(from_user_id, req.to_user_id) {
-        return Ok(());
-    }
-    // No server-side persistence: messages are stored only on clients.
-    if let Some(tx) = state.get_sender(&req.to_user_id.to_string()).await {
-        let event = serde_json::json!({
-            // Back-compat numeric sender for legacy clients (0 when unknown).
-            "from_user_id": from_user_id,
-            // New identity field for clients using identity-based routing.
-            "from_identity": from_user_id.to_string(),
-            "body": req.body,
-        });
-        let msg = ClientMessage {
-            command: "message".to_string(),
-            data: event.to_string(),
-        };
-        // Ignore send errors (receiver might have just disconnected)
-        let _ = tx.send(msg);
-    }
+    // Server no longer relays message bodies over TCP/TLS. Messages must flow via WebRTC.
+    // Intentionally do nothing here to avoid handling plaintext/ciphertext payloads.
+    let _ = (state, from_user_id, req);
     Ok(())
 }
 
@@ -46,25 +27,8 @@ pub async fn send_direct_identity(
     to_identity: String,
     body: String,
 ) -> tokio::io::Result<()> {
-    // If an RTC session is active between these peers, do not relay over TCP/TLS.
-    if let (Some(from_id), Some(to_id)) = (
-        identity_to_session_id(&from_identity),
-        identity_to_session_id(&to_identity),
-    ) && crate::webrtc::has_active_session(from_id, to_id)
-    {
-        return Ok(());
-    }
-
-    if let Some(tx) = state.get_sender(&to_identity).await {
-        let event = serde_json::json!({
-            "from_identity": from_identity,
-            "body": body,
-        });
-        let msg = ClientMessage {
-            command: "message".to_string(),
-            data: event.to_string(),
-        };
-        let _ = tx.send(msg);
-    }
+    // Server no longer relays message bodies over TCP/TLS. Messages must flow via WebRTC.
+    // Intentionally do nothing here to avoid handling plaintext/ciphertext payloads.
+    let _ = (state, from_identity, to_identity, body);
     Ok(())
 }

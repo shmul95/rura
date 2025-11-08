@@ -6,6 +6,7 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::time::{timeout, Duration};
 
 async fn setup_memory_db() -> Arc<Mutex<Connection>> {
     let conn = Connection::open(":memory:").unwrap();
@@ -123,7 +124,7 @@ async fn test_full_auth_and_dm_persistence_and_save() {
     assert!(resp2.success);
     let uid2 = resp2.user_id.unwrap();
 
-    // Send a message from c1 -> c2 with saved=true (opaque envelope)
+    // Send a message from c1 -> c2 (opaque envelope). Server should not relay bodies anymore.
     let dm_req = ClientMessage {
         command: "message".into(),
         data: format!(
@@ -133,10 +134,16 @@ async fn test_full_auth_and_dm_persistence_and_save() {
     };
     write_json(&mut c1, &dm_req).await;
 
-    // c2 should receive the message event
-    let delivered = read_msg(&mut c2).await;
-    assert_eq!(delivered.command, "message");
+    // c2 should NOT receive a message event over TCP (expect timeout)
+    let mut buf = [0u8; 1024];
+    let no_recv = match timeout(Duration::from_millis(50), c2.read(&mut buf)).await {
+        Err(_) => true,            // timeout elapsed: no data
+        Ok(Ok(0)) => true,         // closed
+        Ok(Ok(_n)) => false,       // data received (unexpected)
+        Ok(Err(_)) => true,        // read error treated as no delivery
+    };
+    assert!(no_recv);
 
-    // No server-side persistence anymore; only delivery is asserted.
+    // No server-side persistence nor relay anymore.
     let _ = uid1; // silence
 }

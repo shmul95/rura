@@ -1,5 +1,5 @@
 use rura_server::messaging::handlers::send_direct;
-use rura_server::messaging::models::{DirectMessageEvent, DirectMessageReq};
+use rura_server::messaging::models::DirectMessageReq;
 use rura_server::messaging::state::{AppState, ClientHandle};
 use rura_server::models::client_message::ClientMessage;
 use rusqlite::Connection;
@@ -8,7 +8,7 @@ use tokio::sync::mpsc;
 use tokio::time::{Duration, timeout};
 
 #[tokio::test]
-async fn test_send_direct_to_online_user_delivers_message() {
+async fn direct_message_is_not_relayed_over_tcp() {
     let state = Arc::new(AppState::default());
     let conn = Arc::new(Mutex::new(Connection::open(":memory:").unwrap()));
     {
@@ -37,7 +37,7 @@ async fn test_send_direct_to_online_user_delivers_message() {
     // Sender user id
     let alice_id = 1_i64;
 
-    // Send a direct message to Bob
+    // Attempt to send a direct message to Bob (server should not relay bodies)
     let req = DirectMessageReq {
         to_user_id: bob_id,
         body: "hello world".to_string(),
@@ -46,20 +46,12 @@ async fn test_send_direct_to_online_user_delivers_message() {
         .await
         .unwrap();
 
-    // Bob should receive a ClientMessage with command "message"
-    let delivered: ClientMessage = timeout(Duration::from_millis(100), rx_bob.recv())
-        .await
-        .expect("timed out waiting for message")
-        .expect("channel closed unexpectedly");
-
-    assert_eq!(delivered.command, "message");
-
-    // The data should parse into DirectMessageEvent with the correct sender and body
-    let event: DirectMessageEvent = serde_json::from_str(&delivered.data).unwrap();
-    assert_eq!(event.from_user_id, alice_id);
-    assert_eq!(event.body, "hello world");
-
-    // No server-side persistence anymore; only delivery is asserted.
+    // Bob should NOT receive a relayed message over TCP
+    let res = timeout(Duration::from_millis(100), rx_bob.recv()).await;
+    assert!(
+        res.is_err(),
+        "server must not relay message bodies over TCP"
+    );
 }
 
 #[tokio::test]

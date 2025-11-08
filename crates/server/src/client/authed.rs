@@ -22,8 +22,15 @@ pub(super) async fn handle_client_message(
     match serde_json::from_str::<ClientMessage>(&received) {
         Ok(msg) => {
             if debug_io_enabled() {
-                // Pretty-print nested JSON in data for readability (no backslashes)
-                if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&msg.data) {
+                // Avoid logging message bodies; only log safe signaling metadata.
+                if msg.command == "message" {
+                    println!(
+                        "<<< [{} {}] message <redacted>, data_len={}",
+                        client_addr,
+                        user_id,
+                        msg.data.len()
+                    );
+                } else if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&msg.data) {
                     // If this is an RTC message with an SDP string that itself contains JSON,
                     // attempt to parse it so we don't print escaped content.
                     if let Some(sdp_str) = v.get("sdp").and_then(|x| x.as_str())
@@ -35,12 +42,15 @@ pub(super) async fn handle_client_message(
                     println!("<<< [{} {}] {} {}", client_addr, user_id, msg.command, v);
                 } else {
                     println!(
-                        "<<< [{} {}] {} {}",
-                        client_addr, user_id, msg.command, msg.data
+                        "<<< [{} {}] {} (len={})",
+                        client_addr,
+                        user_id,
+                        msg.command,
+                        msg.data.len()
                     );
                 }
             } else {
-                // Keep concise log by default
+                // Keep concise log by default; do not print message bodies
                 println!(
                     "Received cmd '{}' from user {} ({}), data_len={}",
                     msg.command,
@@ -53,8 +63,6 @@ pub(super) async fn handle_client_message(
                 "message" => {
                     #[derive(serde::Deserialize)]
                     struct LocalDM {
-                        to_user_id: Option<i64>,
-                        to_identity: Option<String>,
                         body: String,
                     }
                     fn is_base64ish(s: &str) -> bool {
@@ -87,27 +95,13 @@ pub(super) async fn handle_client_message(
                                 let _ = outbound.send(err);
                                 return Ok(());
                             }
-                            // Determine target identity: explicit to_identity or numeric to_user_id as string
-                            let to_identity = match (req.to_identity, req.to_user_id) {
-                                (Some(id), _) => id,
-                                (None, Some(n)) => n.to_string(),
-                                (None, None) => {
-                                    let err = ClientMessage {
-                                        command: "error".to_string(),
-                                        data: "Missing to_identity/to_user_id".to_string(),
-                                    };
-                                    let _ = outbound.send(err);
-                                    return Ok(());
-                                }
+                            // Do not relay message bodies; instruct client to use WebRTC channel.
+                            let _ = req; // avoid unused warnings
+                            let info = ClientMessage {
+                                command: "error".to_string(),
+                                data: "Message relay disabled: use WebRTC".to_string(),
                             };
-                            crate::messaging::handlers::send_direct_identity(
-                                Arc::clone(&state),
-                                Arc::clone(&conn),
-                                user_id.clone(),
-                                to_identity,
-                                req.body,
-                            )
-                            .await?;
+                            let _ = outbound.send(info);
                         }
                         Err(_) => {
                             // Notify sender about malformed message request

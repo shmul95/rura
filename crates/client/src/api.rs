@@ -19,11 +19,6 @@ use std::net::TcpStream;
 // no path utilities needed after removing legacy JSON cache
 use crate::webrtc;
 use std::sync::{Arc, Once};
-static RTC_ONLY: once_cell::sync::Lazy<bool> = once_cell::sync::Lazy::new(|| {
-    std::env::var("RURA_RTC_ONLY")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
-});
 
 fn session_id_from_identity(id_b64: &str) -> Result<i64, String> {
     // Derive a stable 63-bit numeric from the 256-bit base64 identity
@@ -745,44 +740,14 @@ pub fn send_direct_message_over_stream(
     if !is_e2ee_envelope(&body) {
         return Err("E2EE required: body must be an opaque v1 envelope".to_string());
     }
-    // Try WebRTC first when an RTC channel to the numeric id is open
-    if *RTC_ONLY {
-        // Enforce RTC-only: send over DC or queue until channel opens
-        let event = serde_json::json!({
-            "from_user_id": user_id,
-            "body": body,
-        })
-        .to_string();
-        return crate::webrtc::queue_or_send(to_user_id, event);
-    } else if crate::webrtc::is_channel_open(to_user_id) {
-        let event = serde_json::json!({
-            "from_user_id": user_id,
-            "body": body,
-        })
-        .to_string();
-        return crate::webrtc::send_over_dc(to_user_id, event);
-    }
-    let tx = {
-        let g = SESSIONS.lock().unwrap();
-        g.get(&user_id).cloned()
-    };
-    let Some(tx) = tx else {
-        return Err("No active stream session for user".to_string());
-    };
-    #[derive(serde::Serialize)]
-    struct OutgoingDM2 {
-        to_user_id: i64,
-        body: String,
-    }
-    let req = OutgoingDM2 { to_user_id, body };
-    let env = ClientMessage {
-        command: "message".to_string(),
-        data: serde_json::to_string(&req).map_err(|e| format!("Serialize error: {e}"))?,
-    };
-    let mut line = serde_json::to_string(&env).map_err(|e| format!("Serialize error: {e}"))?;
-    line.push('\n');
-    tx.send(line)
-        .map_err(|_| "Failed to enqueue send".to_string())
+    // Always use WebRTC: start/ensure offer and queue/send via DataChannel.
+    let _ = crate::webrtc::ensure_offer(user_id, to_user_id);
+    let event = serde_json::json!({
+        "from_user_id": user_id,
+        "body": body,
+    })
+    .to_string();
+    crate::webrtc::queue_or_send(to_user_id, event)
 }
 
 /// Send a direct message targeting a peer by identity (base64 string) using an existing stream.
@@ -812,48 +777,20 @@ pub fn send_direct_message_over_stream_to_identity(
     if !is_e2ee_envelope(&body) {
         return Err("E2EE required: body must be an opaque v1 envelope".to_string());
     }
-    // Try WebRTC first; if no channel, kick off signaling and fall back
-    let remote_id = crate::webrtc::ensure_offer_to_identity(user_id, &to_identity)
-        .and_then(|_| Ok(crate::webrtc::session_id_from_identity(&to_identity).unwrap_or_default()))
-        .unwrap_or_else(|_| 0);
-    if remote_id != 0 {
-        let from_identity = crate::security::load_identity()
-            .map_err(|e| format!("identity: {e}"))?
-            .map(|b| b.user_id)
-            .unwrap_or_default();
-        let event = serde_json::json!({
-            "from_identity": from_identity,
-            "body": body,
-        })
-        .to_string();
-        if *RTC_ONLY {
-            return crate::webrtc::queue_or_send(remote_id, event);
-        } else if crate::webrtc::is_channel_open(remote_id) {
-            return crate::webrtc::send_over_dc(remote_id, event);
-        }
-    }
-    let tx = {
-        let g = SESSIONS.lock().unwrap();
-        g.get(&user_id).cloned()
-    };
-    let Some(tx) = tx else {
-        return Err("No active stream session for user".to_string());
-    };
-
-    #[derive(serde::Serialize)]
-    struct OutgoingDMIdent {
-        to_identity: String,
-        body: String,
-    }
-    let req = OutgoingDMIdent { to_identity, body };
-    let env = ClientMessage {
-        command: "message".to_string(),
-        data: serde_json::to_string(&req).map_err(|e| format!("Serialize error: {e}"))?,
-    };
-    let mut line = serde_json::to_string(&env).map_err(|e| format!("Serialize error: {e}"))?;
-    line.push('\n');
-    tx.send(line)
-        .map_err(|_| "Failed to enqueue send".to_string())
+    // Always use WebRTC: derive remote id, ensure offer, and queue/send via DataChannel.
+    let remote_id = crate::webrtc::session_id_from_identity(&to_identity)
+        .map_err(|_| "Invalid recipient identity".to_string())?;
+    let _ = crate::webrtc::ensure_offer_to_identity(user_id, &to_identity);
+    let from_identity = crate::security::load_identity()
+        .map_err(|e| format!("identity: {e}"))?
+        .map(|b| b.user_id)
+        .unwrap_or_default();
+    let event = serde_json::json!({
+        "from_identity": from_identity,
+        "body": body,
+    })
+    .to_string();
+    crate::webrtc::queue_or_send(remote_id, event)
 }
 
 /// Publish a public key for the authenticated user via an existing stream session.
@@ -1208,44 +1145,21 @@ mod tests {
 
     #[test]
     #[serial_test::serial]
-    fn send_direct_message_over_stream_serializes_envelope() {
-        let (tx, rx) = std::sync::mpsc::channel::<String>();
-        {
-            let mut g = SESSIONS.lock().unwrap();
-            g.insert(42, tx);
-        }
+    fn send_direct_message_rtc_only_numeric_ok() {
         let body = sample_envelope();
+        // Should not attempt TCP relay; ensure it returns Ok even without a stream session.
         let res = send_direct_message_over_stream(42, 7, body.clone());
         assert!(res.is_ok());
-        let line = rx.recv().expect("expected enqueued send");
-        let wrap: ClientMessage = serde_json::from_str(line.trim()).expect("json parse");
-        assert_eq!(wrap.command, "message");
-        let v: serde_json::Value = serde_json::from_str(&wrap.data).expect("payload parse");
-        assert_eq!(v.get("to_user_id").and_then(|n| n.as_i64()), Some(7));
-        assert_eq!(v.get("body").and_then(|s| s.as_str()), Some(body.as_str()));
     }
 
     #[test]
     #[serial_test::serial]
-    fn send_direct_message_over_stream_to_identity_serializes_envelope() {
-        let (tx, rx) = std::sync::mpsc::channel::<String>();
-        {
-            let mut g = SESSIONS.lock().unwrap();
-            g.insert(99, tx);
-        }
+    fn send_direct_message_rtc_only_identity_ok() {
         let body = sample_envelope();
-        let res =
-            send_direct_message_over_stream_to_identity(99, "RID123".to_string(), body.clone());
+        // Use a valid base64 identity value (16 bytes -> 24 base64 chars)
+        let to_identity = base64::engine::general_purpose::STANDARD.encode([1u8; 16]);
+        let res = send_direct_message_over_stream_to_identity(99, to_identity, body.clone());
         assert!(res.is_ok());
-        let line = rx.recv().expect("expected enqueued send");
-        let wrap: ClientMessage = serde_json::from_str(line.trim()).expect("json parse");
-        assert_eq!(wrap.command, "message");
-        let v: serde_json::Value = serde_json::from_str(&wrap.data).expect("payload parse");
-        assert_eq!(
-            v.get("to_identity").and_then(|s| s.as_str()),
-            Some("RID123")
-        );
-        assert_eq!(v.get("body").and_then(|s| s.as_str()), Some(body.as_str()));
     }
 
     #[test]
