@@ -765,8 +765,14 @@ pub fn send_direct_message_over_stream(
     };
     // Always use WebRTC: start/ensure offer and queue/send via DataChannel.
     let _ = crate::webrtc::ensure_offer(user_id, to_user_id);
+    // Include both numeric and identity fields for compatibility with UI consumers.
+    let my_identity = crate::security::load_identity()
+        .map_err(|e| format!("identity: {e}"))?
+        .map(|b| b.user_id)
+        .unwrap_or_default();
     let event = serde_json::json!({
         "from_user_id": user_id,
+        "from_identity": my_identity,
         "body": body,
     })
     .to_string();
