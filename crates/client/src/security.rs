@@ -170,11 +170,13 @@ pub fn generate_and_store_identity() -> Result<IdentityBundle, String> {
     let enc = encrypt_blob(&plain)?;
     ensure_dir(&data_dir())?;
     fs::write(identity_path(), enc).map_err(|e| format!("write identity: {e}"))?;
-    // TEMPORARY: Print the generated user ID and public key so the user can share them
-    println!(
-        "(TEMPORARY) Your ID: {}\n(TEMPORARY) Your Public Key: {}",
-        bundle.user_id, bundle.public_b64
-    );
+    // TEMPORARY: Print only messaging key to avoid confusion
+    println!("(TEMPORARY) Your ID: {}", bundle.user_id);
+    if let Some(xpk) = &bundle.x25519_pub_b64 {
+        println!("(TEMPORARY) Your Public Key: {}", xpk);
+    } else {
+        println!("(TEMPORARY) Your Public Key: {}", bundle.public_b64);
+    }
     Ok(bundle)
 }
 
@@ -201,6 +203,33 @@ pub fn load_identity() -> Result<Option<IdentityBundle>, String> {
     Ok(Some(b))
 }
 
+/// Normalize a base64 public key into raw 32 bytes (accepts unpadded and URL-safe variants).
+pub fn decode_pubkey_b64(pk_b64: &str) -> Result<[u8; 32], String> {
+    let mut s = pk_b64.trim().replace(['\n', '\r', ' '], "");
+    // Accept URL-safe variants
+    s = s.replace('-', "+").replace('_', "/");
+    // Add padding if missing
+    let rem = s.len() % 4;
+    if rem != 0 {
+        s.push_str(&"=".repeat(4 - rem));
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&s)
+        .map_err(|e| format!("pubkey b64 decode: {e}"))?;
+    if bytes.len() != 32 {
+        return Err(format!("pubkey length must be 32 bytes, got {}", bytes.len()));
+    }
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&bytes);
+    Ok(out)
+}
+
+/// Return canonical base64 (padded, standard alphabet) for a given input public key string.
+pub fn canonicalize_pubkey_b64(pk_b64: &str) -> Result<String, String> {
+    let raw = decode_pubkey_b64(pk_b64)?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(raw))
+}
+
 fn hkdf_derive_key(shared: &[u8]) -> [u8; 32] {
     use hkdf::Hkdf;
     use sha2::Sha256;
@@ -221,14 +250,7 @@ fn x25519_shared_secret(priv_b: &[u8; 32], peer_pub: &[u8; 32]) -> [u8; 32] {
 /// Encrypt plaintext for a recipient's X25519 public key. Returns a v1 envelope string.
 pub fn encrypt_for_recipient(plaintext: &[u8], recipient_pub_b64: &str) -> Result<String, String> {
     use chacha20poly1305::aead::Aead;
-    let recip_bytes = general_purpose::STANDARD
-        .decode(recipient_pub_b64)
-        .map_err(|e| format!("recipient pubkey b64: {e}"))?;
-    if recip_bytes.len() != 32 {
-        return Err("recipient pubkey must be 32 bytes".into());
-    }
-    let mut recip = [0u8; 32];
-    recip.copy_from_slice(&recip_bytes);
+    let recip = decode_pubkey_b64(recipient_pub_b64)?;
 
     // Generate ephemeral key pair
     let eph_sk = x25519_dalek::StaticSecret::random_from_rng(rand::thread_rng());
@@ -283,14 +305,7 @@ pub fn decrypt_from_envelope(envelope: &str) -> Result<Vec<u8>, String> {
     let priv_b64 = me
         .x25519_priv_b64
         .ok_or_else(|| "missing x25519 identity".to_string())?;
-    let priv_bytes = general_purpose::STANDARD
-        .decode(priv_b64)
-        .map_err(|e| format!("priv b64: {e}"))?;
-    if priv_bytes.len() != 32 {
-        return Err("invalid private key size".into());
-    }
-    let mut priv_arr = [0u8; 32];
-    priv_arr.copy_from_slice(&priv_bytes);
+    let priv_arr = decode_pubkey_b64(&priv_b64)?; // reuse decoder (same size)
 
     let shared = x25519_shared_secret(&priv_arr, &eph);
     let key_bytes = hkdf_derive_key(&shared);

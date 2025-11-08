@@ -681,39 +681,42 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
         }
       }
     });
-    _sub = widget.incomingRaw.listen((data) async {
-      try {
-        final map = jsonDecode(data) as Map;
-        if (map['type'] == 'auth_ok') return;
-        final fromId = (map['from_identity'] ?? '').toString();
-        final bodyRaw = map['body'] as String? ?? '';
-        if (fromId == widget.recipientId) {
-          final body = _decodeEnvelope(bodyRaw);
-          final now = DateTime.now().toIso8601String();
-          final peer = idToNumeric(widget.recipientId);
-          await appendLocalMessage(
-            fromUserId: peer,
-            toUserId: widget.selfUserId,
-            body: body,
-            timestamp: now,
-          );
-          setState(() => _messages.add(HistoryMessage(
-            id: 0,
-            fromUserId: peer,
-            toUserId: widget.selfUserId,
-            body: body,
-            timestamp: now,
-          )));
-          if (_scroll.hasClients) {
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (_scroll.hasClients) {
-                _scroll.jumpTo(_scroll.position.maxScrollExtent + 80);
-              }
-            });
+    if (widget.inbound == null) {
+      // Fallback only when processed inbound is unavailable
+      _sub = widget.incomingRaw.listen((data) async {
+        try {
+          final map = jsonDecode(data) as Map;
+          if (map['type'] == 'auth_ok') return;
+          final fromId = (map['from_identity'] ?? '').toString();
+          final bodyRaw = map['body'] as String? ?? '';
+          if (fromId == widget.recipientId) {
+            final body = _decodeEnvelope(bodyRaw);
+            final now = DateTime.now().toIso8601String();
+            final peer = idToNumeric(widget.recipientId);
+            await appendLocalMessage(
+              fromUserId: peer,
+              toUserId: widget.selfUserId,
+              body: body,
+              timestamp: now,
+            );
+            setState(() => _messages.add(HistoryMessage(
+              id: 0,
+              fromUserId: peer,
+              toUserId: widget.selfUserId,
+              body: body,
+              timestamp: now,
+            )));
+            if (_scroll.hasClients) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (_scroll.hasClients) {
+                  _scroll.jumpTo(_scroll.position.maxScrollExtent + 80);
+                }
+              });
+            }
           }
-        }
-      } catch (_) {}
-    });
+        } catch (_) {}
+      });
+    }
     // No automatic contact handshake; require manual information exchange.
   }
 

@@ -108,7 +108,14 @@ pub fn get_account_id() -> Result<String, String> {
 pub fn get_account_pubkey() -> Result<String, String> {
     let identity = crate::security::load_identity()?;
     match identity {
-        Some(bundle) => Ok(bundle.public_b64),
+        Some(bundle) => {
+            // Prefer X25519 messaging key when available
+            if let Some(xpk) = bundle.x25519_pub_b64 {
+                Ok(xpk)
+            } else {
+                Ok(bundle.public_b64)
+            }
+        }
         None => Err("No identity found. Please register first.".to_string()),
     }
 }
@@ -782,11 +789,25 @@ pub fn send_direct_message_over_stream(
         }
         None
     }
+    // Try to encrypt with known pubkey: first exact numeric key, then by matching contacts on identity-derived numeric id.
+    fn find_contact_pubkey_by_numeric(numeric: i64) -> Result<Option<String>, String> {
+        let rows = crate::local_storage::list_contacts()?;
+        for row in rows {
+            if let Ok(id_numeric) = super::webrtc::session_id_from_identity(&row.user_id) {
+                if id_numeric == numeric {
+                    return Ok(Some(row.pubkey));
+                }
+            }
+        }
+        Ok(None)
+    }
     let body = if let Some(plain) = try_extract_dev_plaintext(&body) {
         // Upgrade dev wrapper to real encryption when possible
         crate::local_storage::init_storage()?;
         let key = to_user_id.to_string();
-        if let Some(pk) = crate::local_storage::get_contact_pubkey(&key)? {
+        if let Some(pk) = crate::local_storage::get_contact_pubkey(&key)?
+            .or_else(|| find_contact_pubkey_by_numeric(to_user_id).ok().flatten())
+        {
             crate::security::encrypt_for_recipient(plain.as_bytes(), &pk)?
         } else {
             body
@@ -797,7 +818,9 @@ pub fn send_direct_message_over_stream(
         // Attempt to encrypt using a contact entry keyed by numeric id as string
         crate::local_storage::init_storage()?;
         let key = to_user_id.to_string();
-        if let Some(pk) = crate::local_storage::get_contact_pubkey(&key)? {
+        if let Some(pk) = crate::local_storage::get_contact_pubkey(&key)?
+            .or_else(|| find_contact_pubkey_by_numeric(to_user_id).ok().flatten())
+        {
             crate::security::encrypt_for_recipient(body.as_bytes(), &pk)?
         } else {
             body

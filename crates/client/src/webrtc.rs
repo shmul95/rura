@@ -91,12 +91,26 @@ fn decrypt_body_in_event(text: &str) -> String {
     let mut forward = text.to_string();
     if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(text) {
         if let Some(b) = v.get("body").and_then(|s| s.as_str()) {
+            // First try proper E2EE decrypt
             if let Ok(pt) = crate::security::decrypt_from_envelope(b) {
                 if let Ok(s) = String::from_utf8(pt) {
                     if let Some(slot) = v.get_mut("body") {
                         *slot = serde_json::Value::String(s);
                     }
                     forward = v.to_string();
+                    return forward;
+                }
+            }
+            // Fallback: dev wrapper v1:PlainEph:Nonce:<b64-plaintext>
+            let parts: Vec<&str> = b.split(':').collect();
+            if parts.len() == 4 && parts[0] == "v1" && parts[1] == "UGxhaW5FcGg=" && parts[2] == "Tm9uY2U=" {
+                if let Ok(ct) = base64::engine::general_purpose::STANDARD.decode(parts[3]) {
+                    if let Ok(s) = String::from_utf8(ct) {
+                        if let Some(slot) = v.get_mut("body") {
+                            *slot = serde_json::Value::String(s);
+                        }
+                        forward = v.to_string();
+                    }
                 }
             }
         }

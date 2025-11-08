@@ -392,6 +392,8 @@ pub fn add_contact(
     pubkey: String,
     nickname: Option<String>,
 ) -> Result<(), String> {
+    // Normalize and validate pubkey (X25519 32-byte key expected)
+    let canonical_pk = crate::security::canonicalize_pubkey_b64(&pubkey)?;
     with_store(|store| {
         store
             .persistent
@@ -402,7 +404,7 @@ pub fn add_contact(
                  ON CONFLICT(user_id) DO UPDATE SET
                    pubkey=excluded.pubkey,
                    nickname=COALESCE(excluded.nickname, contacts.nickname)",
-                params![user_id, pubkey, nickname],
+                params![user_id, canonical_pk, nickname],
             )
             .map(|_| ())
             .map_err(|e| format!("upsert contact failed: {e}"))
