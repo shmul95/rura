@@ -103,7 +103,11 @@ fn decrypt_body_in_event(text: &str) -> String {
             }
             // Fallback: dev wrapper v1:PlainEph:Nonce:<b64-plaintext>
             let parts: Vec<&str> = b.split(':').collect();
-            if parts.len() == 4 && parts[0] == "v1" && parts[1] == "UGxhaW5FcGg=" && parts[2] == "Tm9uY2U=" {
+            if parts.len() == 4
+                && parts[0] == "v1"
+                && parts[1] == "UGxhaW5FcGg="
+                && parts[2] == "Tm9uY2U="
+            {
                 if let Ok(ct) = base64::engine::general_purpose::STANDARD.decode(parts[3]) {
                     if let Ok(s) = String::from_utf8(ct) {
                         if let Some(slot) = v.get_mut("body") {

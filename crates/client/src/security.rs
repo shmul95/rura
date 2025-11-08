@@ -217,7 +217,10 @@ pub fn decode_pubkey_b64(pk_b64: &str) -> Result<[u8; 32], String> {
         .decode(&s)
         .map_err(|e| format!("pubkey b64 decode: {e}"))?;
     if bytes.len() != 32 {
-        return Err(format!("pubkey length must be 32 bytes, got {}", bytes.len()));
+        return Err(format!(
+            "pubkey length must be 32 bytes, got {}",
+            bytes.len()
+        ));
     }
     let mut out = [0u8; 32];
     out.copy_from_slice(&bytes);
