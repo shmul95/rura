@@ -6,6 +6,7 @@ use once_cell::sync::Lazy;
 
 use crate::messaging::state::AppState;
 use crate::models::client_message::ClientMessage;
+use base64::Engine as _;
 use rura_models::webrtc::{IceCandidate, RtcAnswer, RtcOffer};
 
 /// Global, in-memory WebRTC session registry.
@@ -67,7 +68,7 @@ fn ordered_pair(a: i64, b: i64) -> (i64, i64) {
 }
 
 async fn send_if_online(state: &AppState, to_user_id: i64, msg: ClientMessage) {
-    if let Some(tx) = state.get_sender(&to_user_id.to_string()).await {
+    if let Some(tx) = state.get_sender_by_session_id(to_user_id).await {
         let _ = tx.send(msg);
     }
 }
@@ -118,4 +119,21 @@ pub async fn process_ice(state: std::sync::Arc<AppState>, ice: IceCandidate) {
 pub fn has_active_session(a: i64, b: i64) -> bool {
     let guard = SESSIONS.lock().expect("webrtc sessions lock poisoned");
     guard.sessions.contains_key(&ordered_pair(a, b))
+}
+
+/// Convert a base64 identity string to a stable positive i64 for RTC session keys.
+pub fn identity_to_session_id(id_b64: &str) -> Option<i64> {
+    if let Ok(n) = id_b64.parse::<i64>() {
+        return Some(n);
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(id_b64)
+        .ok()?;
+    if bytes.len() < 8 {
+        return None;
+    }
+    let mut slice = [0u8; 8];
+    slice.copy_from_slice(&bytes[0..8]);
+    let v = u64::from_be_bytes(slice) & 0x7FFF_FFFF_FFFF_FFFF;
+    Some(v as i64)
 }

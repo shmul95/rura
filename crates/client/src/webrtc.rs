@@ -60,6 +60,7 @@ struct Peer {
     pc: Arc<RTCPeerConnection>,
     dc: Arc<tokio::sync::Mutex<Option<Arc<RTCDataChannel>>>>,
     open: Arc<std::sync::atomic::AtomicBool>,
+    remote_id: i64,
 }
 
 static PEERS: Lazy<std::sync::Mutex<std::collections::HashMap<i64, Peer>>> =
@@ -69,6 +70,10 @@ static PEERS: Lazy<std::sync::Mutex<std::collections::HashMap<i64, Peer>>> =
 static DC_INBOUND: Lazy<
     std::sync::Mutex<std::collections::HashMap<i64, std::sync::mpsc::Sender<String>>>,
 > = Lazy::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+// Outgoing message queues per remote peer when DC is not yet open
+static QUEUES: Lazy<std::sync::Mutex<std::collections::HashMap<i64, Vec<String>>>> =
+    Lazy::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 
 pub fn register_inbound_sink(user_id: i64, tx: std::sync::mpsc::Sender<String>) {
     DC_INBOUND.lock().unwrap().insert(user_id, tx);
@@ -111,6 +116,7 @@ fn get_or_create_peer(user_id: i64, remote_id: i64) -> Result<Peer, String> {
         pc: Arc::clone(&pc),
         dc: Arc::new(tokio::sync::Mutex::new(None)),
         open: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        remote_id,
     };
 
     // ICE candidates: forward to remote via server
@@ -144,9 +150,16 @@ fn get_or_create_peer(user_id: i64, remote_id: i64) -> Result<Peer, String> {
         let dc_open_flag = Arc::clone(&dc_open_flag);
         let dc_slot = Arc::clone(&dc_slot);
         Box::pin(async move {
+            let rid = peer.remote_id;
             dc.on_open(Box::new(move || {
                 dc_open_flag.store(true, std::sync::atomic::Ordering::SeqCst);
                 println!("[rtc] data channel open");
+                // Flush queued messages for this remote id
+                if let Some(mut pending) = QUEUES.lock().unwrap().remove(&rid) {
+                    for msg in pending.drain(..) {
+                        let _ = crate::webrtc::send_over_dc(rid, msg);
+                    }
+                }
                 Box::pin(async {})
             }));
             // Forward incoming DC messages to the app sink via DC_INBOUND
@@ -281,6 +294,18 @@ pub fn send_over_dc(remote_id: i64, data: String) -> Result<(), String> {
             .map(|_| ())
             .map_err(|e| format!("dc send: {e}"))
     })
+}
+
+pub fn queue_or_send(remote_id: i64, event_json: String) -> Result<(), String> {
+    if is_channel_open(remote_id) {
+        return send_over_dc(remote_id, event_json);
+    }
+    // Queue until DC opens
+    let mut g = QUEUES.lock().unwrap();
+    g.entry(remote_id)
+        .or_default()
+        .push(event_json);
+    Ok(())
 }
 
 /// Send an SDP offer to a peer via server signaling (over the TLS stream).

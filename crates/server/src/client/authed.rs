@@ -22,7 +22,23 @@ pub(super) async fn handle_client_message(
     match serde_json::from_str::<ClientMessage>(&received) {
         Ok(msg) => {
             if debug_io_enabled() {
-                println!("<<< [{} {}] {:?}", client_addr, user_id, msg);
+                // Pretty-print nested JSON in data for readability (no backslashes)
+                if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&msg.data) {
+                    // If this is an RTC message with an SDP string that itself contains JSON,
+                    // attempt to parse it so we don't print escaped content.
+                    if let Some(sdp_str) = v.get("sdp").and_then(|x| x.as_str())
+                        && let Ok(inner) = serde_json::from_str::<serde_json::Value>(sdp_str)
+                        && let Some(slot) = v.get_mut("sdp")
+                    {
+                        *slot = inner;
+                    }
+                    println!("<<< [{} {}] {} {}", client_addr, user_id, msg.command, v);
+                } else {
+                    println!(
+                        "<<< [{} {}] {} {}",
+                        client_addr, user_id, msg.command, msg.data
+                    );
+                }
             } else {
                 // Keep concise log by default
                 println!(
@@ -106,7 +122,10 @@ pub(super) async fn handle_client_message(
                 "rtc_offer" => {
                     match serde_json::from_str::<rura_models::webrtc::RtcOffer>(&msg.data) {
                         Ok(mut offer) => {
-                            offer.from_user_id = user_id.parse().unwrap_or_default();
+                            if let Some(from_id) = webrtc::handler::identity_to_session_id(&user_id)
+                            {
+                                offer.from_user_id = from_id;
+                            }
                             webrtc::process_offer(Arc::clone(&state), offer).await;
                         }
                         Err(_) => {
@@ -121,7 +140,10 @@ pub(super) async fn handle_client_message(
                 "rtc_answer" => {
                     match serde_json::from_str::<rura_models::webrtc::RtcAnswer>(&msg.data) {
                         Ok(mut answer) => {
-                            answer.from_user_id = user_id.parse().unwrap_or_default();
+                            if let Some(from_id) = webrtc::handler::identity_to_session_id(&user_id)
+                            {
+                                answer.from_user_id = from_id;
+                            }
                             webrtc::process_answer(Arc::clone(&state), answer).await;
                         }
                         Err(_) => {
@@ -136,7 +158,10 @@ pub(super) async fn handle_client_message(
                 "rtc_ice" => {
                     match serde_json::from_str::<rura_models::webrtc::IceCandidate>(&msg.data) {
                         Ok(mut ice) => {
-                            ice.from_user_id = user_id.parse().unwrap_or_default();
+                            if let Some(from_id) = webrtc::handler::identity_to_session_id(&user_id)
+                            {
+                                ice.from_user_id = from_id;
+                            }
                             webrtc::process_ice(Arc::clone(&state), ice).await;
                         }
                         Err(_) => {

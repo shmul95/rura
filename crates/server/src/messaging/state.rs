@@ -3,6 +3,7 @@ use std::sync::Arc;
 use tokio::sync::{RwLock, mpsc};
 
 use crate::models::client_message::ClientMessage;
+use crate::webrtc::handler::identity_to_session_id;
 
 #[derive(Clone)]
 pub struct ClientHandle {
@@ -38,6 +39,21 @@ impl AppState {
     ) -> Option<mpsc::UnboundedSender<ClientMessage>> {
         let guard = self.users.read().await;
         guard.get(identity_key).map(|h| h.tx.clone())
+    }
+
+    pub async fn get_sender_by_session_id(
+        &self,
+        session_id: i64,
+    ) -> Option<mpsc::UnboundedSender<ClientMessage>> {
+        let guard = self.users.read().await;
+        for (id, handle) in guard.iter() {
+            if let Some(sid) = identity_to_session_id(id)
+                && sid == session_id
+            {
+                return Some(handle.tx.clone());
+            }
+        }
+        None
     }
 
     pub fn require_e2ee(&self) -> bool {

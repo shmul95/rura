@@ -19,6 +19,11 @@ use std::net::TcpStream;
 // no path utilities needed after removing legacy JSON cache
 use crate::webrtc;
 use std::sync::{Arc, Once};
+static RTC_ONLY: once_cell::sync::Lazy<bool> = once_cell::sync::Lazy::new(|| {
+    std::env::var("RURA_RTC_ONLY")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+});
 
 fn session_id_from_identity(id_b64: &str) -> Result<i64, String> {
     // Derive a stable 63-bit numeric from the 256-bit base64 identity
@@ -741,8 +746,21 @@ pub fn send_direct_message_over_stream(
         return Err("E2EE required: body must be an opaque v1 envelope".to_string());
     }
     // Try WebRTC first when an RTC channel to the numeric id is open
-    if crate::webrtc::is_channel_open(to_user_id) {
-        return crate::webrtc::send_over_dc(to_user_id, body);
+    if *RTC_ONLY {
+        // Enforce RTC-only: send over DC or queue until channel opens
+        let event = serde_json::json!({
+            "from_user_id": user_id,
+            "body": body,
+        })
+        .to_string();
+        return crate::webrtc::queue_or_send(to_user_id, event);
+    } else if crate::webrtc::is_channel_open(to_user_id) {
+        let event = serde_json::json!({
+            "from_user_id": user_id,
+            "body": body,
+        })
+        .to_string();
+        return crate::webrtc::send_over_dc(to_user_id, event);
     }
     let tx = {
         let g = SESSIONS.lock().unwrap();
@@ -798,8 +816,21 @@ pub fn send_direct_message_over_stream_to_identity(
     let remote_id = crate::webrtc::ensure_offer_to_identity(user_id, &to_identity)
         .and_then(|_| Ok(crate::webrtc::session_id_from_identity(&to_identity).unwrap_or_default()))
         .unwrap_or_else(|_| 0);
-    if remote_id != 0 && crate::webrtc::is_channel_open(remote_id) {
-        return crate::webrtc::send_over_dc(remote_id, body);
+    if remote_id != 0 {
+        let from_identity = crate::security::load_identity()
+            .map_err(|e| format!("identity: {e}"))?
+            .map(|b| b.user_id)
+            .unwrap_or_default();
+        let event = serde_json::json!({
+            "from_identity": from_identity,
+            "body": body,
+        })
+        .to_string();
+        if *RTC_ONLY {
+            return crate::webrtc::queue_or_send(remote_id, event);
+        } else if crate::webrtc::is_channel_open(remote_id) {
+            return crate::webrtc::send_over_dc(remote_id, event);
+        }
     }
     let tx = {
         let g = SESSIONS.lock().unwrap();

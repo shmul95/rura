@@ -4,6 +4,7 @@ use std::sync::Mutex;
 
 use crate::models::client_message::ClientMessage;
 use crate::webrtc;
+use crate::webrtc::handler::identity_to_session_id;
 
 use super::models::DirectMessageReq;
 use super::state::AppState;
@@ -45,6 +46,15 @@ pub async fn send_direct_identity(
     to_identity: String,
     body: String,
 ) -> tokio::io::Result<()> {
+    // If an RTC session is active between these peers, do not relay over TCP/TLS.
+    if let (Some(from_id), Some(to_id)) = (
+        identity_to_session_id(&from_identity),
+        identity_to_session_id(&to_identity),
+    ) && crate::webrtc::has_active_session(from_id, to_id)
+    {
+        return Ok(());
+    }
+
     if let Some(tx) = state.get_sender(&to_identity).await {
         let event = serde_json::json!({
             "from_identity": from_identity,
