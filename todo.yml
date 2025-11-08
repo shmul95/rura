@@ -32,8 +32,13 @@ tasks:
       Prevent creation of a new DataChannel for each message. Ensure a single persistent
       channel per peer is reused for all message traffic, with graceful reconnection logic
       when a channel closes. Eliminate repeated rtc_offer/rtc_answer cycles per message.
-    status: pending
-    done: false
+    status: completed
+    done: true
+    notes: |
+      - Reuse a single PeerConnection + DataChannel per remote peer; `PEERS` cache persists channels.
+      - Added `negotiating` flag to prevent duplicate offers/channel creation; idempotent `ensure_offer`.
+      - `send_over_dc` avoids nested `block_on` by spawning when already in a runtime.
+      - Reconnect: on DataChannel close, clear slot, mark flags, and re‑offer after a short delay.
 
 meta:
   owner: codex-agent

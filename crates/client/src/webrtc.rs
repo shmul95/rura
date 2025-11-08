@@ -60,6 +60,7 @@ struct Peer {
     pc: Arc<RTCPeerConnection>,
     dc: Arc<tokio::sync::Mutex<Option<Arc<RTCDataChannel>>>>,
     open: Arc<std::sync::atomic::AtomicBool>,
+    negotiating: Arc<std::sync::atomic::AtomicBool>,
     remote_id: i64,
 }
 
@@ -116,6 +117,7 @@ fn get_or_create_peer(user_id: i64, remote_id: i64) -> Result<Peer, String> {
         pc: Arc::clone(&pc),
         dc: Arc::new(tokio::sync::Mutex::new(None)),
         open: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        negotiating: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         remote_id,
     };
 
@@ -144,15 +146,21 @@ fn get_or_create_peer(user_id: i64, remote_id: i64) -> Result<Peer, String> {
 
     // Data channel callbacks will be attached later (when created or received)
     let dc_open_flag = Arc::clone(&peer.open);
+    let dc_neg_flag = Arc::clone(&peer.negotiating);
     let dc_slot = Arc::clone(&peer.dc);
     let this_user = ice_user;
     pc.on_data_channel(Box::new(move |dc: Arc<RTCDataChannel>| {
-        let dc_open_flag = Arc::clone(&dc_open_flag);
-        let dc_slot = Arc::clone(&dc_slot);
+        let dc_open_flag_open = Arc::clone(&dc_open_flag);
+        let dc_neg_flag_open = Arc::clone(&dc_neg_flag);
+        let dc_slot_set = Arc::clone(&dc_slot);
+        let dc_open_flag_close = Arc::clone(&dc_open_flag);
+        let dc_neg_flag_close = Arc::clone(&dc_neg_flag);
+        let dc_slot_clear = Arc::clone(&dc_slot);
         Box::pin(async move {
             let rid = peer.remote_id;
             dc.on_open(Box::new(move || {
-                dc_open_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                dc_open_flag_open.store(true, std::sync::atomic::Ordering::SeqCst);
+                dc_neg_flag_open.store(false, std::sync::atomic::Ordering::SeqCst);
                 println!("[rtc] data channel open");
                 // Flush queued messages for this remote id
                 if let Some(mut pending) = QUEUES.lock().unwrap().remove(&rid) {
@@ -160,6 +168,30 @@ fn get_or_create_peer(user_id: i64, remote_id: i64) -> Result<Peer, String> {
                         let _ = crate::webrtc::send_over_dc(rid, msg);
                     }
                 }
+                Box::pin(async {})
+            }));
+            // When DC closes, mark flags and attempt graceful re-offer later.
+            let my_user_id = this_user;
+            dc.on_close(Box::new(move || {
+                let rid = rid;
+                dc_open_flag_close.store(false, std::sync::atomic::Ordering::SeqCst);
+                dc_neg_flag_close.store(false, std::sync::atomic::Ordering::SeqCst);
+                // clear dc slot asynchronously
+                let dc_slot_for_close = Arc::clone(&dc_slot_clear);
+                let fut = async move {
+                    let mut slot = dc_slot_for_close.lock().await;
+                    *slot = None;
+                };
+                if tokio::runtime::Handle::try_current().is_ok() {
+                    tokio::spawn(fut);
+                } else {
+                    RT.block_on(fut);
+                }
+                // Small delayed re-offer; use thread sleep to avoid needing timers here
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                    let _ = crate::webrtc::ensure_offer(my_user_id, rid);
+                });
                 Box::pin(async {})
             }));
             // Forward incoming DC messages to the app sink via DC_INBOUND
@@ -172,7 +204,7 @@ fn get_or_create_peer(user_id: i64, remote_id: i64) -> Result<Peer, String> {
                 })
             }));
             // store channel
-            *dc_slot.lock().await = Some(Arc::clone(&dc));
+            *dc_slot_set.lock().await = Some(Arc::clone(&dc));
         })
     }));
 
@@ -187,25 +219,58 @@ pub fn ensure_offer_to_identity(user_id: i64, to_identity: &str) -> Result<(), S
 
 pub fn ensure_offer(user_id: i64, remote_id: i64) -> Result<(), String> {
     let peer = get_or_create_peer(user_id, remote_id)?;
-    // Create data channel as initiator and generate offer
+    // If already open or in progress, do nothing.
+    if peer.open.load(std::sync::atomic::Ordering::SeqCst)
+        || peer
+            .negotiating
+            .load(std::sync::atomic::Ordering::SeqCst)
+    {
+        return Ok(());
+    }
+    // Check if a channel already exists in the slot; if so, assume negotiation pending.
+    let has_dc = if tokio::runtime::Handle::try_current().is_ok() {
+        // Can't block here; approximate by checking without await (use try_lock via now_or_never pattern)
+        false
+    } else {
+        RT.block_on(async { peer.dc.lock().await.is_some() })
+    };
+    if has_dc {
+        return Ok(());
+    }
+    peer.negotiating
+        .store(true, std::sync::atomic::Ordering::SeqCst);
     let pc = Arc::clone(&peer.pc);
     let dc_slot = Arc::clone(&peer.dc);
-    RT.block_on(async move {
-        let dc = pc
-            .create_data_channel("msg", None)
-            .await
-            .map_err(|e| format!("dc: {e}"))?;
+    let open_flag = Arc::clone(&peer.open);
+    let neg_flag = Arc::clone(&peer.negotiating);
+    let fut = async move {
+        // Create data channel as initiator and generate offer
+        // Skip if slot already filled by a remote-initiated channel
         {
-            let mut slot = dc_slot.lock().await;
-            *slot = Some(Arc::clone(&dc));
-        }
-        dc.on_open(Box::new({
-            let open = Arc::clone(&peer.open);
-            move || {
-                open.store(true, std::sync::atomic::Ordering::SeqCst);
-                Box::pin(async {})
+            let existing = dc_slot.lock().await;
+            if existing.is_some() {
+                drop(existing);
+            } else {
+                drop(existing);
+                let dc = pc
+                    .create_data_channel("msg", None)
+                    .await
+                    .map_err(|e| format!("dc: {e}"))?;
+                {
+                    let mut slot = dc_slot.lock().await;
+                    *slot = Some(Arc::clone(&dc));
+                }
+                dc.on_open(Box::new({
+                    let open = Arc::clone(&open_flag);
+                    let neg = Arc::clone(&neg_flag);
+                    move || {
+                        open.store(true, std::sync::atomic::Ordering::SeqCst);
+                        neg.store(false, std::sync::atomic::Ordering::SeqCst);
+                        Box::pin(async {})
+                    }
+                }));
             }
-        }));
+        }
         let offer = pc
             .create_offer(None)
             .await
@@ -214,8 +279,21 @@ pub fn ensure_offer(user_id: i64, remote_id: i64) -> Result<(), String> {
             .await
             .map_err(|e| format!("set_local: {e}"))?;
         let payload = serde_json::to_string(&offer).map_err(|e| format!("serde: {e}"))?;
-        start_rtc_offer_over_stream(user_id, remote_id, payload)
-    })
+        let res = start_rtc_offer_over_stream(user_id, remote_id, payload);
+        if res.is_err() {
+            // allow retry later
+            neg_flag.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+        res
+    };
+    if tokio::runtime::Handle::try_current().is_ok() {
+        tokio::spawn(async move {
+            let _ = fut.await;
+        });
+        Ok(())
+    } else {
+        RT.block_on(fut)
+    }
 }
 
 pub fn on_remote_offer(user_id: i64, offer: RtcOffer) -> Result<(), String> {
