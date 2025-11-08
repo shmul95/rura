@@ -302,9 +302,7 @@ pub fn queue_or_send(remote_id: i64, event_json: String) -> Result<(), String> {
     }
     // Queue until DC opens
     let mut g = QUEUES.lock().unwrap();
-    g.entry(remote_id)
-        .or_default()
-        .push(event_json);
+    g.entry(remote_id).or_default().push(event_json);
     Ok(())
 }
 
