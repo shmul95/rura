@@ -91,7 +91,7 @@ async fn pubkey_set_and_get_and_opaque_message_flow() {
     assert_eq!(wrap1.command, "auth_response");
     let val1: serde_json::Value = serde_json::from_str(&wrap1.data).unwrap();
     assert_eq!(val1.get("success").and_then(|v| v.as_bool()), Some(true));
-    let id1 = val1.get("id").and_then(|v| v.as_str()).unwrap().to_string();
+    let _id1 = val1.get("id").and_then(|v| v.as_str()).unwrap().to_string();
 
     // Register Bob
     let reg2 = ClientMessage {

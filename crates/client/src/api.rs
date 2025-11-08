@@ -139,6 +139,22 @@ pub fn list_contacts_json() -> Result<String, String> {
     serde_json::to_string(&rows).map_err(|e| format!("serialize contacts: {e}"))
 }
 
+/// Encrypt plaintext for a contact identity using their published public key.
+#[frb]
+pub fn encrypt_message_for_identity(to_identity: String, plaintext: String) -> Result<String, String> {
+    crate::local_storage::init_storage()?;
+    let pk = crate::local_storage::get_contact_pubkey(&to_identity)?
+        .ok_or_else(|| "Recipient not found or missing pubkey".to_string())?;
+    crate::security::encrypt_for_recipient(plaintext.as_bytes(), &pk)
+}
+
+/// Decrypt a v1 envelope into plaintext using our private key.
+#[frb]
+pub fn decrypt_message_from_envelope(envelope: String) -> Result<String, String> {
+    let pt = crate::security::decrypt_from_envelope(&envelope)?;
+    String::from_utf8(pt).map_err(|_| "plaintext not valid UTF-8".to_string())
+}
+
 fn build_root_store_from_pem(pem: &str) -> Result<RootCertStore, String> {
     let mut reader = std::io::Cursor::new(pem.as_bytes());
     let certs_iter = rustls_pemfile::certs(&mut reader);
@@ -737,9 +753,16 @@ pub fn send_direct_message_over_stream(
         let (_v, eph, nonce, ct) = (parts[0], parts[1], parts[2], parts[3]);
         is_base64ish(eph) && is_base64ish(nonce) && is_base64ish(ct)
     }
-    if !is_e2ee_envelope(&body) {
-        return Err("E2EE required: body must be an opaque v1 envelope".to_string());
-    }
+    let body = if is_e2ee_envelope(&body) {
+        body
+    } else {
+        // Attempt to encrypt using a contact entry keyed by numeric id as string
+        crate::local_storage::init_storage()?;
+        let key = to_user_id.to_string();
+        let pk = crate::local_storage::get_contact_pubkey(&key)?
+            .ok_or_else(|| "Recipient pubkey not found".to_string())?;
+        crate::security::encrypt_for_recipient(body.as_bytes(), &pk)?
+    };
     // Always use WebRTC: start/ensure offer and queue/send via DataChannel.
     let _ = crate::webrtc::ensure_offer(user_id, to_user_id);
     let event = serde_json::json!({
@@ -774,9 +797,14 @@ pub fn send_direct_message_over_stream_to_identity(
         let (_v, eph, nonce, ct) = (parts[0], parts[1], parts[2], parts[3]);
         is_base64ish(eph) && is_base64ish(nonce) && is_base64ish(ct)
     }
-    if !is_e2ee_envelope(&body) {
-        return Err("E2EE required: body must be an opaque v1 envelope".to_string());
-    }
+    let body = if is_e2ee_envelope(&body) {
+        body
+    } else {
+        crate::local_storage::init_storage()?;
+        let pk = crate::local_storage::get_contact_pubkey(&to_identity)?
+            .ok_or_else(|| "Recipient pubkey not found".to_string())?;
+        crate::security::encrypt_for_recipient(body.as_bytes(), &pk)?
+    };
     // Always use WebRTC: derive remote id, ensure offer, and queue/send via DataChannel.
     let remote_id = crate::webrtc::session_id_from_identity(&to_identity)
         .map_err(|_| "Invalid recipient identity".to_string())?;

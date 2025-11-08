@@ -440,6 +440,28 @@ pub fn list_contacts() -> Result<Vec<ContactRow>, String> {
     })
 }
 
+/// Look up a contact's public key by `user_id` (identity string).
+pub fn get_contact_pubkey(user_id: &str) -> Result<Option<String>, String> {
+    with_store(|store| {
+        let conn = store.persistent.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT pubkey FROM contacts WHERE user_id = ?1")
+            .map_err(|e| format!("prepare get_contact_pubkey failed: {e}"))?;
+        let mut rows = stmt
+            .query(rusqlite::params![user_id])
+            .map_err(|e| format!("query get_contact_pubkey failed: {e}"))?;
+        if let Some(row) = rows
+            .next()
+            .map_err(|e| format!("row get_contact_pubkey failed: {e}"))?
+        {
+            let pk: Option<String> = row.get(0).map_err(|e| format!("col get: {e}"))?;
+            Ok(pk)
+        } else {
+            Ok(None)
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
