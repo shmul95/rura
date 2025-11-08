@@ -519,9 +519,17 @@ pub fn open_message_stream_tls(
 
     // Channel for outgoing writes from FRB API
     let (tx, rx): (Sender<String>, Receiver<String>) = mpsc::channel();
-    // Channel for inbound RTC messages to forward to sink
+    // Channel for inbound RTC messages; forward them to sink on a dedicated thread
     let (rtc_tx, rtc_rx): (Sender<String>, Receiver<String>) = mpsc::channel();
     crate::webrtc::register_inbound_sink(user_id, rtc_tx);
+    {
+        let sink_clone = sink.clone();
+        thread::spawn(move || {
+            while let Ok(dc_msg) = rtc_rx.recv() {
+                let _ = sink_clone.add(dc_msg);
+            }
+        });
+    }
     {
         let mut g = SESSIONS.lock().unwrap();
         g.insert(user_id, tx);
@@ -538,9 +546,7 @@ pub fn open_message_stream_tls(
                 let _ = tls.write_all(line.as_bytes());
                 let _ = tls.flush();
             }
-            while let Ok(dc_msg) = rtc_rx.try_recv() {
-                let _ = sink.add(dc_msg);
-            }
+            // RTC inbound is forwarded by a dedicated thread (see above)
 
             // 2) Attempt to read incoming data
             match tls.read(&mut buf) {
@@ -639,9 +645,17 @@ pub fn open_message_stream_register_tls(
 
     // Channel for outgoing writes from FRB API
     let (tx, rx): (Sender<String>, Receiver<String>) = mpsc::channel();
-    // Channel for inbound RTC messages to forward to sink
+    // Channel for inbound RTC messages; forward them to sink on a dedicated thread
     let (rtc_tx, rtc_rx): (Sender<String>, Receiver<String>) = mpsc::channel();
     crate::webrtc::register_inbound_sink(user_id, rtc_tx);
+    {
+        let sink_clone = sink.clone();
+        thread::spawn(move || {
+            while let Ok(dc_msg) = rtc_rx.recv() {
+                let _ = sink_clone.add(dc_msg);
+            }
+        });
+    }
     {
         let mut g = SESSIONS.lock().unwrap();
         g.insert(user_id, tx);
@@ -657,12 +671,7 @@ pub fn open_message_stream_register_tls(
                 let _ = tls.write_all(line.as_bytes());
                 let _ = tls.flush();
             }
-            while let Ok(dc_msg) = rtc_rx.try_recv() {
-                let _ = sink.add(dc_msg);
-            }
-            while let Ok(dc_msg) = rtc_rx.try_recv() {
-                let _ = sink.add(dc_msg);
-            }
+            // RTC inbound is forwarded by a dedicated thread (see above)
             match tls.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
