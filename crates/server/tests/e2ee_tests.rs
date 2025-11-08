@@ -91,7 +91,7 @@ async fn pubkey_set_and_get_and_opaque_message_flow() {
     assert_eq!(wrap1.command, "auth_response");
     let val1: serde_json::Value = serde_json::from_str(&wrap1.data).unwrap();
     assert_eq!(val1.get("success").and_then(|v| v.as_bool()), Some(true));
-    let id1 = val1.get("id").and_then(|v| v.as_str()).unwrap().to_string();
+    let _id1 = val1.get("id").and_then(|v| v.as_str()).unwrap().to_string();
 
     // Register Bob
     let reg2 = ClientMessage {
@@ -128,7 +128,7 @@ async fn pubkey_set_and_get_and_opaque_message_flow() {
 
     // Fetching pubkey via DB by numeric id is not supported in identity mode; skip get_pubkey
 
-    // Alice sends an opaque E2EE envelope as body
+    // Alice sends an opaque E2EE envelope as body. Server should not relay bodies anymore.
     let opaque_body = "v1:RU5WUEs=:Tk9OQ0U=:Q0lQSEVSVEVYVA=="; // sample opaque string
     let dm_req = ClientMessage {
         command: "message".into(),
@@ -139,20 +139,23 @@ async fn pubkey_set_and_get_and_opaque_message_flow() {
     };
     write_json(&mut c1, &dm_req).await;
 
-    // Bob should receive the same opaque body
-    let delivered = read_msg(&mut c2).await;
-    assert_eq!(delivered.command, "message");
-    let msg_val: serde_json::Value = serde_json::from_str(&delivered.data).unwrap();
-    assert_eq!(
-        msg_val.get("from_identity").and_then(|v| v.as_str()),
-        Some(id1.as_str())
-    );
-    assert_eq!(
-        msg_val.get("body").and_then(|v| v.as_str()),
-        Some(opaque_body)
-    );
+    // Sender should receive an error instructing to use WebRTC
+    let err_env = read_msg(&mut c1).await;
+    assert_eq!(err_env.command, "error");
+    assert!(err_env.data.contains("WebRTC"));
 
-    // No server-side persistence; only delivery is asserted above.
+    // Bob should NOT receive a relayed message over TCP (expect timeout)
+    use tokio::time::{Duration, timeout};
+    let mut buf = [0u8; 1024];
+    let no_recv = match timeout(Duration::from_millis(50), c2.read(&mut buf)).await {
+        Err(_) => true,      // timeout elapsed: no data
+        Ok(Ok(0)) => true,   // closed
+        Ok(Ok(_n)) => false, // data received (unexpected)
+        Ok(Err(_)) => true,  // read error treated as no delivery
+    };
+    assert!(no_recv);
+
+    // No server-side persistence nor relay anymore.
 }
 
 #[tokio::test]

@@ -27,6 +27,8 @@ where
     let mut outbound_rx: Option<
         mpsc::UnboundedReceiver<crate::models::client_message::ClientMessage>,
     > = None;
+    // Accumulate partial reads until a full line (\n) is available
+    let mut read_acc: Vec<u8> = Vec::new();
 
     loop {
         if let Some(rx) = outbound_rx.as_mut() {
@@ -38,24 +40,26 @@ where
                             break;
                         }
                         Ok(n) => {
-                            if debug_io_enabled() {
-                                let s = String::from_utf8_lossy(&buffer[..n]).to_string();
-                                if let Some(ref uid) = authenticated_user_id {
-                                    println!("<<< [{} {}] {}", client_addr, uid, s.trim_end());
-                                } else {
-                                    println!("<<< [{}] {}", client_addr, s.trim_end());
-                                }
-                            }
+                            read_acc.extend_from_slice(&buffer[..n]);
                             let was_unauth = authenticated_user_id.is_none();
-                            dispatch::handle_read_success(
-                                stream,
-                                Arc::clone(&conn),
-                                Arc::clone(&state),
-                                client_addr,
-                                &mut authenticated_user_id,
-                                outbound_tx.as_ref(),
-                                &buffer[..n],
-                            ).await?;
+                            // Drain complete lines and handle each individually
+                            while let Some(pos) = read_acc.iter().position(|&b| b == b'\n') {
+                                let line = read_acc.drain(..=pos).collect::<Vec<u8>>();
+                                let line = &line[..line.len().saturating_sub(1)];
+                                if debug_io_enabled() && authenticated_user_id.is_none() {
+                                    let s = String::from_utf8_lossy(line).to_string();
+                                    println!("<<< [{}] {}", client_addr, s);
+                                }
+                                dispatch::handle_read_success(
+                                    stream,
+                                    Arc::clone(&conn),
+                                    Arc::clone(&state),
+                                    client_addr,
+                                    &mut authenticated_user_id,
+                                    outbound_tx.as_ref(),
+                                    line,
+                                ).await?;
+                            }
                             if was_unauth
                                 && let Some(user_id) = authenticated_user_id.clone()
                             {
@@ -84,7 +88,14 @@ where
                                     } else {
                                         print!(">>> [{}] ", client_addr);
                                     }
-                                    println!("{}", json.trim_end());
+                                    // Pretty-print outbound message (decode nested `data` if possible)
+                                    match serde_json::from_str::<crate::models::client_message::ClientMessage>(&json) {
+                                        Ok(wrapper) => match serde_json::from_str::<serde_json::Value>(&wrapper.data) {
+                                            Ok(v) => println!("{} {}", wrapper.command, v),
+                                            Err(_) => println!("{} {}", wrapper.command, wrapper.data),
+                                        },
+                                        Err(_) => println!("{}", json.trim_end()),
+                                    }
                                 }
                                 if let Err(e) = stream.write_all(json.as_bytes()).await {
                                     io_helpers::handle_read_error(client_addr, e).await;
@@ -106,25 +117,27 @@ where
                     break;
                 }
                 Ok(n) => {
-                    if debug_io_enabled() {
-                        let s = String::from_utf8_lossy(&buffer[..n]).to_string();
-                        if let Some(ref uid) = authenticated_user_id {
-                            println!("<<< [{} {}] {}", client_addr, uid, s.trim_end());
-                        } else {
-                            println!("<<< [{}] {}", client_addr, s.trim_end());
-                        }
-                    }
+                    read_acc.extend_from_slice(&buffer[..n]);
                     let was_unauth = authenticated_user_id.is_none();
-                    dispatch::handle_read_success(
-                        stream,
-                        Arc::clone(&conn),
-                        Arc::clone(&state),
-                        client_addr,
-                        &mut authenticated_user_id,
-                        outbound_tx.as_ref(),
-                        &buffer[..n],
-                    )
-                    .await?;
+                    // Drain complete lines and handle each individually
+                    while let Some(pos) = read_acc.iter().position(|&b| b == b'\n') {
+                        let line = read_acc.drain(..=pos).collect::<Vec<u8>>();
+                        let line = &line[..line.len().saturating_sub(1)];
+                        if debug_io_enabled() && authenticated_user_id.is_none() {
+                            let s = String::from_utf8_lossy(line).to_string();
+                            println!("<<< [{}] {}", client_addr, s);
+                        }
+                        dispatch::handle_read_success(
+                            stream,
+                            Arc::clone(&conn),
+                            Arc::clone(&state),
+                            client_addr,
+                            &mut authenticated_user_id,
+                            outbound_tx.as_ref(),
+                            line,
+                        )
+                        .await?;
+                    }
 
                     // If we just became authenticated, set up outbound channel and register
                     if was_unauth && let Some(user_id) = authenticated_user_id.clone() {

@@ -392,6 +392,8 @@ pub fn add_contact(
     pubkey: String,
     nickname: Option<String>,
 ) -> Result<(), String> {
+    // Normalize and validate pubkey (X25519 32-byte key expected)
+    let canonical_pk = crate::security::canonicalize_pubkey_b64(&pubkey)?;
     with_store(|store| {
         store
             .persistent
@@ -402,7 +404,7 @@ pub fn add_contact(
                  ON CONFLICT(user_id) DO UPDATE SET
                    pubkey=excluded.pubkey,
                    nickname=COALESCE(excluded.nickname, contacts.nickname)",
-                params![user_id, pubkey, nickname],
+                params![user_id, canonical_pk, nickname],
             )
             .map(|_| ())
             .map_err(|e| format!("upsert contact failed: {e}"))
@@ -437,6 +439,28 @@ pub fn list_contacts() -> Result<Vec<ContactRow>, String> {
             out.push(r.map_err(|e| format!("row contacts: {e}"))?);
         }
         Ok::<_, String>(out)
+    })
+}
+
+/// Look up a contact's public key by `user_id` (identity string).
+pub fn get_contact_pubkey(user_id: &str) -> Result<Option<String>, String> {
+    with_store(|store| {
+        let conn = store.persistent.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT pubkey FROM contacts WHERE user_id = ?1")
+            .map_err(|e| format!("prepare get_contact_pubkey failed: {e}"))?;
+        let mut rows = stmt
+            .query(rusqlite::params![user_id])
+            .map_err(|e| format!("query get_contact_pubkey failed: {e}"))?;
+        if let Some(row) = rows
+            .next()
+            .map_err(|e| format!("row get_contact_pubkey failed: {e}"))?
+        {
+            let pk: Option<String> = row.get(0).map_err(|e| format!("col get: {e}"))?;
+            Ok(pk)
+        } else {
+            Ok(None)
+        }
     })
 }
 

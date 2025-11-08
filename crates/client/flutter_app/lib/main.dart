@@ -563,6 +563,7 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
                       recipientId: rid,
                       recipientPubKey: '',
                       recipientName: _nicknames[peerId],
+                      inbound: _incoming.stream,
                       incomingRaw: widget.incoming ?? openMessageStreamTls(
                         host: widget.session.host,
                         port: widget.session.port,
@@ -645,8 +646,9 @@ class ChatIdentityPage extends StatefulWidget {
   final String recipientId;
   final String recipientPubKey;
   final Stream<String> incomingRaw;
+  final Stream<HistoryMessage>? inbound;
   final String? recipientName;
-  const ChatIdentityPage({super.key, required this.session, required this.selfUserId, required this.recipientId, required this.recipientPubKey, required this.incomingRaw, this.recipientName});
+  const ChatIdentityPage({super.key, required this.session, required this.selfUserId, required this.recipientId, required this.recipientPubKey, required this.incomingRaw, this.inbound, this.recipientName});
   @override
   State<ChatIdentityPage> createState() => _ChatIdentityPageState();
 }
@@ -657,6 +659,7 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
   bool _sending = false;
   final List<HistoryMessage> _messages = [];
   StreamSubscription<String>? _sub;
+  StreamSubscription<HistoryMessage>? _inSub;
   // Use top-level idToNumeric()
 
   @override
@@ -664,39 +667,56 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
     super.initState();
     // Load existing conversation from local DB so the view is not empty
     _loadFromLocal();
-    _sub = widget.incomingRaw.listen((data) async {
-      try {
-        final map = jsonDecode(data) as Map;
-        if (map['type'] == 'auth_ok') return;
-        final fromId = (map['from_identity'] ?? '').toString();
-        final bodyRaw = map['body'] as String? ?? '';
-        if (fromId == widget.recipientId) {
-          final body = _decodeEnvelope(bodyRaw);
-          final now = DateTime.now().toIso8601String();
-          final peer = idToNumeric(widget.recipientId);
-          await appendLocalMessage(
-            fromUserId: peer,
-            toUserId: widget.selfUserId,
-            body: body,
-            timestamp: now,
-          );
-          setState(() => _messages.add(HistoryMessage(
-            id: 0,
-            fromUserId: peer,
-            toUserId: widget.selfUserId,
-            body: body,
-            timestamp: now,
-          )));
-          if (_scroll.hasClients) {
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (_scroll.hasClients) {
-                _scroll.jumpTo(_scroll.position.maxScrollExtent + 80);
-              }
-            });
-          }
+    // Prefer processed inbound HistoryMessage stream for live refresh
+    _inSub = widget.inbound?.listen((m) {
+      final peer = idToNumeric(widget.recipientId);
+      if (m.fromUserId == peer) {
+        setState(() => _messages.add(m));
+        if (_scroll.hasClients) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (_scroll.hasClients) {
+              _scroll.jumpTo(_scroll.position.maxScrollExtent + 80);
+            }
+          });
         }
-      } catch (_) {}
+      }
     });
+    if (widget.inbound == null) {
+      // Fallback only when processed inbound is unavailable
+      _sub = widget.incomingRaw.listen((data) async {
+        try {
+          final map = jsonDecode(data) as Map;
+          if (map['type'] == 'auth_ok') return;
+          final fromId = (map['from_identity'] ?? '').toString();
+          final bodyRaw = map['body'] as String? ?? '';
+          if (fromId == widget.recipientId) {
+            final body = _decodeEnvelope(bodyRaw);
+            final now = DateTime.now().toIso8601String();
+            final peer = idToNumeric(widget.recipientId);
+            await appendLocalMessage(
+              fromUserId: peer,
+              toUserId: widget.selfUserId,
+              body: body,
+              timestamp: now,
+            );
+            setState(() => _messages.add(HistoryMessage(
+              id: 0,
+              fromUserId: peer,
+              toUserId: widget.selfUserId,
+              body: body,
+              timestamp: now,
+            )));
+            if (_scroll.hasClients) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (_scroll.hasClients) {
+                  _scroll.jumpTo(_scroll.position.maxScrollExtent + 80);
+                }
+              });
+            }
+          }
+        } catch (_) {}
+      });
+    }
     // No automatic contact handshake; require manual information exchange.
   }
 
@@ -736,6 +756,7 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
   @override
   void dispose() {
     _sub?.cancel();
+    _inSub?.cancel();
     super.dispose();
   }
 
@@ -896,6 +917,13 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
                   Expanded(
                     child: TextField(
                       controller: _input,
+                      textInputAction: TextInputAction.send,
+                      onSubmitted: (_) {
+                        if (!_sending) {
+                          // ignore: discarded_futures
+                          _send();
+                        }
+                      },
                       decoration: const InputDecoration(
                         hintText: 'Type a message',
                         border: OutlineInputBorder(),
@@ -1110,6 +1138,13 @@ class _ChatPageState extends State<ChatPage> {
                   Expanded(
                     child: TextField(
                       controller: _input,
+                      textInputAction: TextInputAction.send,
+                      onSubmitted: (_) {
+                        if (!_sending) {
+                          // ignore: discarded_futures
+                          _send();
+                        }
+                      },
                       decoration: const InputDecoration(
                         hintText: 'Type a message',
                         border: OutlineInputBorder(),
