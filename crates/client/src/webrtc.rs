@@ -86,6 +86,24 @@ fn emit_inbound(user_id: i64, data: String) {
     }
 }
 
+#[allow(clippy::collapsible_if, clippy::needless_borrow)]
+fn decrypt_body_in_event(text: &str) -> String {
+    let mut forward = text.to_string();
+    if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(text) {
+        if let Some(b) = v.get("body").and_then(|s| s.as_str()) {
+            if let Ok(pt) = crate::security::decrypt_from_envelope(b) {
+                if let Ok(s) = String::from_utf8(pt) {
+                    if let Some(slot) = v.get_mut("body") {
+                        *slot = serde_json::Value::String(s);
+                    }
+                    forward = v.to_string();
+                }
+            }
+        }
+    }
+    forward
+}
+
 fn get_or_create_peer(user_id: i64, remote_id: i64) -> Result<Peer, String> {
     if let Some(p) = PEERS.lock().unwrap().get(&remote_id).cloned() {
         return Ok(p);
@@ -201,7 +219,8 @@ fn get_or_create_peer(user_id: i64, remote_id: i64) -> Result<Peer, String> {
                             text.len(),
                             text
                         );
-                        emit_inbound(this_user, text.to_string());
+                        let forward = decrypt_body_in_event(text);
+                        emit_inbound(this_user, forward);
                     }
                 })
             }));
@@ -292,7 +311,8 @@ pub fn ensure_offer(user_id: i64, remote_id: i64) -> Result<(), String> {
                                 text.len(),
                                 text
                             );
-                            emit_inbound(my_user, text.to_string());
+                            let forward = decrypt_body_in_event(text);
+                            emit_inbound(my_user, forward);
                         }
                     })
                 }));

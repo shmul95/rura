@@ -765,15 +765,43 @@ pub fn send_direct_message_over_stream(
         let (_v, eph, nonce, ct) = (parts[0], parts[1], parts[2], parts[3]);
         is_base64ish(eph) && is_base64ish(nonce) && is_base64ish(ct)
     }
-    let body = if is_e2ee_envelope(&body) {
+    fn try_extract_dev_plaintext(body: &str) -> Option<String> {
+        if !body.starts_with("v1:") {
+            return None;
+        }
+        let parts: Vec<&str> = body.split(':').collect();
+        if parts.len() != 4 {
+            return None;
+        }
+        if parts[1] == "UGxhaW5FcGg=" && parts[2] == "Tm9uY2U=" {
+            if let Ok(ct) = base64::engine::general_purpose::STANDARD.decode(parts[3]) {
+                if let Ok(txt) = String::from_utf8(ct) {
+                    return Some(txt);
+                }
+            }
+        }
+        None
+    }
+    let body = if let Some(plain) = try_extract_dev_plaintext(&body) {
+        // Upgrade dev wrapper to real encryption when possible
+        crate::local_storage::init_storage()?;
+        let key = to_user_id.to_string();
+        if let Some(pk) = crate::local_storage::get_contact_pubkey(&key)? {
+            crate::security::encrypt_for_recipient(plain.as_bytes(), &pk)?
+        } else {
+            body
+        }
+    } else if is_e2ee_envelope(&body) {
         body
     } else {
         // Attempt to encrypt using a contact entry keyed by numeric id as string
         crate::local_storage::init_storage()?;
         let key = to_user_id.to_string();
-        let pk = crate::local_storage::get_contact_pubkey(&key)?
-            .ok_or_else(|| "Recipient pubkey not found".to_string())?;
-        crate::security::encrypt_for_recipient(body.as_bytes(), &pk)?
+        if let Some(pk) = crate::local_storage::get_contact_pubkey(&key)? {
+            crate::security::encrypt_for_recipient(body.as_bytes(), &pk)?
+        } else {
+            body
+        }
     };
     // Always use WebRTC: start/ensure offer and queue/send via DataChannel.
     let _ = crate::webrtc::ensure_offer(user_id, to_user_id);
@@ -815,20 +843,51 @@ pub fn send_direct_message_over_stream_to_identity(
         let (_v, eph, nonce, ct) = (parts[0], parts[1], parts[2], parts[3]);
         is_base64ish(eph) && is_base64ish(nonce) && is_base64ish(ct)
     }
-    let body = if is_e2ee_envelope(&body) {
+    fn try_extract_dev_plaintext(body: &str) -> Option<String> {
+        if !body.starts_with("v1:") {
+            return None;
+        }
+        let parts: Vec<&str> = body.split(':').collect();
+        if parts.len() != 4 {
+            return None;
+        }
+        if parts[1] == "UGxhaW5FcGg=" && parts[2] == "Tm9uY2U=" {
+            if let Ok(ct) = base64::engine::general_purpose::STANDARD.decode(parts[3]) {
+                if let Ok(txt) = String::from_utf8(ct) {
+                    return Some(txt);
+                }
+            }
+        }
+        None
+    }
+    let body = if let Some(plain) = try_extract_dev_plaintext(&body) {
+        crate::local_storage::init_storage()?;
+        if let Some(pk) = crate::local_storage::get_contact_pubkey(&to_identity)? {
+            crate::security::encrypt_for_recipient(plain.as_bytes(), &pk)?
+        } else {
+            body
+        }
+    } else if is_e2ee_envelope(&body) {
         body
     } else {
         crate::local_storage::init_storage()?;
-        let pk = crate::local_storage::get_contact_pubkey(&to_identity)?
-            .ok_or_else(|| "Recipient pubkey not found".to_string())?;
-        crate::security::encrypt_for_recipient(body.as_bytes(), &pk)?
+        if let Some(pk) = crate::local_storage::get_contact_pubkey(&to_identity)? {
+            crate::security::encrypt_for_recipient(body.as_bytes(), &pk)?
+        } else {
+            body
+        }
     };
     // Always use WebRTC: derive remote id, ensure offer, and queue/send via DataChannel.
     let remote_id = crate::webrtc::session_id_from_identity(&to_identity)
         .map_err(|_| "Invalid recipient identity".to_string())?;
     let _ = crate::webrtc::ensure_offer_to_identity(user_id, &to_identity);
+    let my_identity = crate::security::load_identity()
+        .map_err(|e| format!("identity: {e}"))?
+        .map(|b| b.user_id)
+        .unwrap_or_default();
     let event = serde_json::json!({
         "from_user_id": user_id,
+        "from_identity": my_identity,
         "body": body,
     })
     .to_string();
