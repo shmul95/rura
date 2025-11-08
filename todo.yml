@@ -18,8 +18,13 @@ tasks:
       Replace Base64 message encoding with true E2EE encryption using the recipient’s
       public key. On send, encrypt with recipient's key; on receive, decrypt with own
       private key. Ensure compatibility with existing message DTOs in crates/models.
-    status: pending
-    done: false
+    status: completed
+    done: true
+    notes: |
+      - Added X25519 static keys to client identity; generated on first run or backfilled for legacy identities.
+      - Implemented envelope v1: v1:<eph_b64>:<nonce_b64>:<ct_b64> using X25519 + HKDF-SHA256 + XChaCha20-Poly1305.
+      - Client send APIs auto-encrypt plaintext using contact pubkeys; no TCP relay.
+      - Exposed FRB helpers: encrypt_message_for_identity, decrypt_message_from_envelope.
 
   - id: 3
     title: "Maintain persistent WebRTC DataChannel"

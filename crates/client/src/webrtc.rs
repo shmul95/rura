@@ -284,16 +284,22 @@ pub fn send_over_dc(remote_id: i64, data: String) -> Result<(), String> {
     if !peer.open.load(std::sync::atomic::Ordering::SeqCst) {
         return Err("rtc channel not open".into());
     }
-    let dc_opt = RT.block_on(async { peer.dc.lock().await.clone() });
-    let Some(dc) = dc_opt else {
-        return Err("no data channel".into());
-    };
-    RT.block_on(async move {
+    let fut = async move {
+        let dc_opt = peer.dc.lock().await.clone();
+        let Some(dc) = dc_opt else {
+            return Err::<(), String>("no data channel".into());
+        };
         dc.send_text(data)
             .await
             .map(|_| ())
             .map_err(|e| format!("dc send: {e}"))
-    })
+    };
+    if tokio::runtime::Handle::try_current().is_ok() {
+        tokio::spawn(fut);
+        Ok(())
+    } else {
+        RT.block_on(fut)
+    }
 }
 
 pub fn queue_or_send(remote_id: i64, event_json: String) -> Result<(), String> {
