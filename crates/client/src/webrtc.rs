@@ -195,6 +195,7 @@ fn get_or_create_peer(user_id: i64, remote_id: i64) -> Result<Peer, String> {
                 let this_user = this_user;
                 Box::pin(async move {
                     if let Ok(text) = std::str::from_utf8(&msg.data) {
+                        println!("[rtc] rx (user {}) {} bytes: {}", this_user, text.len(), text);
                         emit_inbound(this_user, text.to_string());
                     }
                 })
@@ -267,10 +268,19 @@ pub fn ensure_offer(user_id: i64, remote_id: i64) -> Result<(), String> {
                 }));
                 // Attach on_message for initiator as well, so it can receive.
                 let my_user = user_id;
+                let rid2 = remote_id;
                 dc.on_message(Box::new(move |msg: DataChannelMessage| {
                     let my_user = my_user;
+                    let rid2 = rid2;
                     Box::pin(async move {
                         if let Ok(text) = std::str::from_utf8(&msg.data) {
+                            println!(
+                                "[rtc] rx (user {} from {}) {} bytes: {}",
+                                my_user,
+                                rid2,
+                                text.len(),
+                                text
+                            );
                             emit_inbound(my_user, text.to_string());
                         }
                     })
@@ -392,9 +402,13 @@ pub fn send_over_dc(remote_id: i64, data: String) -> Result<(), String> {
         let Some(dc) = dc_opt else {
             return Err::<(), String>("no data channel".into());
         };
-        dc.send_text(data)
+        let payload = data;
+        let len = payload.len();
+        dc.send_text(payload.clone())
             .await
-            .map(|_| ())
+            .map(|_| {
+                println!("[rtc] tx (remote {}) {} bytes", remote_id, len);
+            })
             .map_err(|e| format!("dc send: {e}"))
     };
     if tokio::runtime::Handle::try_current().is_ok() {
@@ -411,6 +425,11 @@ pub fn queue_or_send(remote_id: i64, event_json: String) -> Result<(), String> {
     }
     // Queue until DC opens
     let mut g = QUEUES.lock().unwrap();
+    println!(
+        "[rtc] queue (remote {}) {} bytes (channel not open)",
+        remote_id,
+        event_json.len()
+    );
     g.entry(remote_id).or_default().push(event_json);
     Ok(())
 }
