@@ -260,9 +260,17 @@ pub fn ensure_offer(user_id: i64, remote_id: i64) -> Result<(), String> {
                 dc.on_open(Box::new({
                     let open = Arc::clone(&open_flag);
                     let neg = Arc::clone(&neg_flag);
+                    let rid = remote_id;
                     move || {
                         open.store(true, std::sync::atomic::Ordering::SeqCst);
                         neg.store(false, std::sync::atomic::Ordering::SeqCst);
+                        println!("[rtc] data channel open (initiator)");
+                        // Flush queued messages for this remote id
+                        if let Some(mut pending) = QUEUES.lock().unwrap().remove(&rid) {
+                            for msg in pending.drain(..) {
+                                let _ = crate::webrtc::send_over_dc(rid, msg);
+                            }
+                        }
                         Box::pin(async {})
                     }
                 }));
