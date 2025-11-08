@@ -914,6 +914,13 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
                   Expanded(
                     child: TextField(
                       controller: _input,
+                      textInputAction: TextInputAction.send,
+                      onSubmitted: (_) {
+                        if (!_sending) {
+                          // ignore: discarded_futures
+                          _send();
+                        }
+                      },
                       decoration: const InputDecoration(
                         hintText: 'Type a message',
                         border: OutlineInputBorder(),
@@ -1128,6 +1135,13 @@ class _ChatPageState extends State<ChatPage> {
                   Expanded(
                     child: TextField(
                       controller: _input,
+                      textInputAction: TextInputAction.send,
+                      onSubmitted: (_) {
+                        if (!_sending) {
+                          // ignore: discarded_futures
+                          _send();
+                        }
+                      },
                       decoration: const InputDecoration(
                         hintText: 'Type a message',
                         border: OutlineInputBorder(),
