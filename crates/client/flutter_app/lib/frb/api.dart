@@ -5,6 +5,7 @@
 
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
+import 'dart:typed_data';
 
 // These functions are ignored because they are not marked as `pub`: `auth_over_stream`, `build_root_store_from_pem`, `cache_base_dir`, `chat_file`, `chats_dir`, `ensure_dir`, `fetch_history_over_stream`, `list_chat_files`, `make_tls_stream`, `read_chat`, `read_line`, `user_dir`, `write_chat`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `LocalMsg`
@@ -249,7 +250,24 @@ class HistoryBundle {
     required this.message,
     this.userId,
     required this.messages,
-  });
+});
+
+/// Send media bytes to a peer over the WebRTC data channel.
+Future<void> sendMediaToIdentity({
+  required PlatformInt64 userId,
+  required String toIdentity,
+  required String mime,
+  String? name,
+  required Uint8List bytes,
+  BigInt? chunkSize,
+}) => RustLib.instance.api.crateApiSendMediaToIdentity(
+  userId: userId,
+  toIdentity: toIdentity,
+  mime: mime,
+  name: name,
+  bytes: bytes,
+  chunkSize: chunkSize,
+);
 
   @override
   int get hashCode =>

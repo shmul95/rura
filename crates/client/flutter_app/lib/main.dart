@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:file_picker/file_picker.dart';
+import 'dart:typed_data';
 import 'frb/api.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'frb/frb_generated.dart';
@@ -939,6 +941,61 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
     }
   }
 
+  String _guessMime(String name) {
+    final lower = name.toLowerCase();
+    if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+    if (lower.endsWith('.png')) return 'image/png';
+    if (lower.endsWith('.gif')) return 'image/gif';
+    if (lower.endsWith('.webp')) return 'image/webp';
+    if (lower.endsWith('.bmp')) return 'image/bmp';
+    if (lower.endsWith('.heic') || lower.endsWith('.heif')) return 'image/heic';
+    return 'application/octet-stream';
+  }
+
+  Future<void> _pickAndSendImage() async {
+    if (_sending) return;
+    setState(() => _sending = true);
+    try {
+      final res = await FilePicker.platform.pickFiles(
+        type: FileType.image,
+        allowMultiple: false,
+        withData: true,
+      );
+      if (res == null || res.files.isEmpty) return;
+      final file = res.files.single;
+      Uint8List? bytes = file.bytes;
+      if (bytes == null && file.path != null) {
+        bytes = await File(file.path!).readAsBytes();
+      }
+      if (bytes == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not read selected file')),
+        );
+        return;
+      }
+      final name = file.name.isNotEmpty ? file.name : 'image';
+      final mime = _guessMime(name);
+      // Call FRB to send chunked media over WebRTC
+      await sendMediaToIdentity(
+        userId: widget.selfUserId,
+        toIdentity: widget.recipientId,
+        mime: mime,
+        name: name,
+        bytes: bytes,
+        chunkSize: BigInt.from(12 * 1024),
+      );
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Sending $name...')),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Image send failed: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final ridShort = widget.recipientId.length > 10 ? widget.recipientId.substring(0, 10) + '…' : widget.recipientId;
@@ -989,6 +1046,11 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
               padding: const EdgeInsets.all(8),
               child: Row(
                 children: [
+                  IconButton(
+                    tooltip: 'Send image',
+                    onPressed: _sending ? null : _pickAndSendImage,
+                    icon: const Icon(Icons.image),
+                  ),
                   Expanded(
                     child: TextField(
                       controller: _input,
