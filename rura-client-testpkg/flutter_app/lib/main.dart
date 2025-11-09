@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:file_picker/file_picker.dart';
 import 'dart:typed_data';
 import 'frb/api.dart';
 import 'package:flutter/services.dart' show rootBundle;
@@ -952,14 +953,27 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
   }
 
   Future<void> _pickAndSendImage() async {
-    // In-app fallback file chooser (no external plugin). Starts at user's home.
     if (_sending) return;
     setState(() => _sending = true);
     try {
-      final picked = await _browseForImage(context);
-      if (picked == null) return;
-      final bytes = picked.$1;
-      final name = picked.$2;
+      final res = await FilePicker.platform.pickFiles(
+        type: FileType.image,
+        allowMultiple: false,
+        withData: true,
+      );
+      if (res == null || res.files.isEmpty) return;
+      final file = res.files.single;
+      Uint8List? bytes = file.bytes;
+      if (bytes == null && file.path != null) {
+        bytes = await File(file.path!).readAsBytes();
+      }
+      if (bytes == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not read selected file')),
+        );
+        return;
+      }
+      final name = file.name.isNotEmpty ? file.name : 'image';
       final mime = _guessMime(name);
       // Call FRB to send chunked media over WebRTC
       await sendMediaToIdentity(
@@ -980,96 +994,6 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
     } finally {
       if (mounted) setState(() => _sending = false);
     }
-  }
-
-  Future<(Uint8List,String)?> _browseForImage(BuildContext context) async {
-    Directory start;
-    final home = Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'];
-    if (home != null && home.isNotEmpty) {
-      start = Directory(home);
-    } else {
-      start = Directory.current;
-    }
-
-    Directory current = start;
-    String? selectedPath;
-    return showDialog<(Uint8List,String)?>(
-      context: context,
-      builder: (ctx) {
-        return StatefulBuilder(builder: (ctx, setState) {
-          final entries = current
-              .listSync()
-              .whereType<FileSystemEntity>()
-              .where((e) {
-                final name = e.uri.pathSegments.isNotEmpty ? e.uri.pathSegments.last : e.path;
-                // Show dirs and common image files
-                if (e is Directory) return true;
-                final lower = name.toLowerCase();
-                return lower.endsWith('.jpg') || lower.endsWith('.jpeg') || lower.endsWith('.png') || lower.endsWith('.gif') || lower.endsWith('.webp') || lower.endsWith('.bmp') || lower.endsWith('.heic') || lower.endsWith('.heif');
-              })
-              .toList()
-            ..sort((a, b) => a is Directory && b is! Directory
-                ? -1
-                : a is! Directory && b is Directory
-                    ? 1
-                    : a.path.compareTo(b.path));
-          return AlertDialog(
-            title: Text('Choose image — ${current.path}'),
-            content: SizedBox(
-              width: 600,
-              height: 400,
-              child: ListView.builder(
-                itemCount: entries.length,
-                itemBuilder: (_, i) {
-                  final e = entries[i];
-                  final name = e.uri.pathSegments.isNotEmpty ? e.uri.pathSegments.last : e.path;
-                  final isDir = e is Directory;
-                  return ListTile(
-                    leading: Icon(isDir ? Icons.folder : Icons.image),
-                    title: Text(name),
-                    onTap: () async {
-                      if (isDir) {
-                        try {
-                          current = Directory(e.path);
-                          setState(() {});
-                        } catch (_) {}
-                      } else {
-                        selectedPath = e.path;
-                        try {
-                          final bytes = await File(e.path).readAsBytes();
-                          if (ctx.mounted) Navigator.of(ctx).pop((bytes, name));
-                        } catch (err) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('Failed to read file: $err')),
-                          );
-                        }
-                      }
-                    },
-                  );
-                },
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () async {
-                  // Go up one directory if possible
-                  final parent = current.parent;
-                  if (parent.path != current.path) {
-                    current = parent;
-                    setState(() {});
-                  }
-                },
-                child: const Text('Up'),
-              ),
-              TextButton(
-                onPressed: () => Navigator.of(ctx).pop(null),
-                child: const Text('Cancel'),
-              ),
-            ],
-          );
-        });
-      },
-    );
   }
 
   @override
