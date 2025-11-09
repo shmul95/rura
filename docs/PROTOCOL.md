@@ -107,3 +107,45 @@ Error cases (post-auth)
 - Envelope stability ensures additional commands can be added without breaking parsing.
 - A persistence layer can add offline delivery with `delivered_at`/`read_at` fields in the future.
 - Optional presence events (`presence` command) can be added without changing existing clients.
+
+## WebRTC Data Channel: Media Messages
+
+Overview
+- Peers establish a WebRTC data channel via SDP offer/answer exchanged over the TLS stream.
+- Once open, user-to-user payloads are sent P2P; the server does not relay message bodies.
+
+Media Transfer Format (over data channel)
+- Text JSON envelope for chunked media frames:
+  - `{`
+  - `  "type": "media",`
+  - `  "from_user_id": <i64>,`
+  - `  "from_identity": "<base64-identity>",`
+  - `  "to_identity": "<base64-identity>",`
+  - `  "mime": "image/jpeg" | "image/png" | "audio/mpeg" | ...,`
+  - `  "name": "optional-filename.ext" | null,`
+  - `  "checksum": "<hex-sha256-of-complete-file>",`
+  - `  "total_size": <u64>,`
+  - `  "msg_id": "<hex-16-byte-id>",`
+  - `  "chunk_index": <u32>,`
+  - `  "chunk_count": <u32>,`
+  - `  "data_b64": "<base64-of-chunk-bytes>"`
+  - `}`
+
+Reassembly Event
+- The receiver reassembles chunks per `msg_id` and verifies the `checksum`.
+- On success, the client emits a final event to the app sink:
+  - `{`
+  - `  "type": "media_complete",`
+  - `  "from_user_id": <i64>,`
+  - `  "from_identity": "<base64-identity>",`
+  - `  "mime": "...",`
+  - `  "name": "..." | null,`
+  - `  "checksum": "<hex-sha256>",`
+  - `  "total_size": <u64>,`
+  - `  "msg_id": "<hex>",`
+  - `  "data_b64": "<base64-of-complete-file>"`
+  - `}`
+
+Security
+- WebRTC provides transport encryption (DTLS/SRTP). The server does not see or log media contents.
+- Application-level E2EE for media can be layered later by encrypting `data_b64` payloads prior to sending.
