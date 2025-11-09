@@ -442,6 +442,8 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
       final peer = m.fromUserId == _selfId ? m.toUserId : m.fromUserId;
       _groups.putIfAbsent(peer, () => []).add(m);
     }
+    // Load any saved nicknames/identity mappings from local storage
+    _loadNicknames();
     _startStream();
   }
 
@@ -504,6 +506,77 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
         // ignore malformed event
       }
     }, onError: (_) {});
+  }
+
+  // ----- Nicknames persistence (simple local JSON next to encrypted DB) -----
+  File _nicknamesFile() {
+    try {
+      final envDir = Platform.environment['RURA_CLIENT_DATA_DIR'];
+      final dir = envDir != null && envDir.trim().isNotEmpty
+          ? Directory(envDir)
+          : Directory('../data');
+      return File('${dir.path}/nicknames.json');
+    } catch (_) {
+      return File('../data/nicknames.json');
+    }
+  }
+
+  Future<void> _loadNicknames() async {
+    try {
+      final f = _nicknamesFile();
+      if (!await f.exists()) return;
+      final raw = await f.readAsString();
+      final map = jsonDecode(raw);
+      if (map is Map) {
+        final nicks = map['nicknames'];
+        final idmap = map['identities'];
+        final loadedNicks = <int, String>{};
+        final loadedIds = <int, String>{};
+        if (nicks is Map) {
+          for (final e in nicks.entries) {
+            final k = int.tryParse(e.key.toString());
+            final v = e.value?.toString();
+            if (k != null && v != null && v.isNotEmpty) {
+              loadedNicks[k] = v;
+            }
+          }
+        }
+        if (idmap is Map) {
+          for (final e in idmap.entries) {
+            final k = int.tryParse(e.key.toString());
+            final v = e.value?.toString();
+            if (k != null && v != null && v.isNotEmpty) {
+              loadedIds[k] = v;
+            }
+          }
+        }
+        if (mounted) {
+          setState(() {
+            _nicknames = loadedNicks;
+            _identityByPeer.addAll(loadedIds);
+          });
+        }
+      }
+    } catch (_) {
+      // Ignore parse errors to avoid breaking UI
+    }
+  }
+
+  Future<void> _saveNicknames() async {
+    try {
+      final f = _nicknamesFile();
+      final dir = f.parent;
+      if (!await dir.exists()) {
+        await dir.create(recursive: true);
+      }
+      final data = <String, dynamic>{
+        'nicknames': _nicknames.map((k, v) => MapEntry(k.toString(), v)),
+        'identities': _identityByPeer.map((k, v) => MapEntry(k.toString(), v)),
+      };
+      await f.writeAsString(jsonEncode(data));
+    } catch (_) {
+      // Best-effort persistence; ignore failures silently
+    }
   }
 
   @override
@@ -611,6 +684,8 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
               _identityByPeer[peer] = rid;
               _groups.putIfAbsent(peer, () => <HistoryMessage>[]);
             });
+            // Persist nickname and identity mapping for future sessions
+            unawaited(_saveNicknames());
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(content: Text('Contact added: ' + (_nicknames[peer] ?? rid.substring(0, 10) + '…'))),
             );
