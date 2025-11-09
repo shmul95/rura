@@ -4,6 +4,7 @@ use once_cell::sync::Lazy;
 use rura_models::webrtc::{IceCandidate, RtcAnswer, RtcOffer};
 
 // WebRTC crates
+use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 use webrtc::api::APIBuilder;
@@ -17,6 +18,132 @@ use webrtc::interceptor::registry::Registry;
 use webrtc::peer_connection::RTCPeerConnection;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
+
+#[derive(Default)]
+struct MediaAssembly {
+    mime: String,
+    name: Option<String>,
+    checksum: String,
+    total_size: usize,
+    chunk_count: u32,
+    received: u32,
+    chunks: Vec<Option<Vec<u8>>>,
+    from_user_id: i64,
+    from_identity: Option<String>,
+}
+
+static MEDIA_INBOUND: Lazy<std::sync::Mutex<std::collections::HashMap<String, MediaAssembly>>> =
+    Lazy::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+fn handle_media_chunk(v: serde_json::Value, user_id: i64) -> Result<(), String> {
+    let msg_id = v
+        .get("msg_id")
+        .and_then(|s| s.as_str())
+        .ok_or_else(|| "missing msg_id".to_string())?
+        .to_string();
+    let chunk_index = v
+        .get("chunk_index")
+        .and_then(|n| n.as_u64())
+        .ok_or_else(|| "missing chunk_index".to_string())? as usize;
+    let chunk_count = v
+        .get("chunk_count")
+        .and_then(|n| n.as_u64())
+        .ok_or_else(|| "missing chunk_count".to_string())? as u32;
+    let total_size = v
+        .get("total_size")
+        .and_then(|n| n.as_u64())
+        .ok_or_else(|| "missing total_size".to_string())? as usize;
+    let checksum = v
+        .get("checksum")
+        .and_then(|s| s.as_str())
+        .ok_or_else(|| "missing checksum".to_string())?
+        .to_string();
+    let mime = v
+        .get("mime")
+        .and_then(|s| s.as_str())
+        .unwrap_or("application/octet-stream")
+        .to_string();
+    let name = v
+        .get("name")
+        .and_then(|s| s.as_str())
+        .map(|s| s.to_string());
+    let from_user_id = v
+        .get("from_user_id")
+        .and_then(|n| n.as_i64())
+        .unwrap_or_default();
+    let from_identity = v
+        .get("from_identity")
+        .and_then(|s| s.as_str())
+        .map(|s| s.to_string());
+    let data_b64 = v
+        .get("data_b64")
+        .and_then(|s| s.as_str())
+        .ok_or_else(|| "missing data_b64".to_string())?;
+    let chunk_bytes = base64::engine::general_purpose::STANDARD
+        .decode(data_b64)
+        .map_err(|e| format!("base64: {e}"))?;
+
+    let mut map = MEDIA_INBOUND.lock().map_err(|_| "media lock".to_string())?;
+    let entry = map.entry(msg_id.clone()).or_insert_with(|| MediaAssembly {
+        mime: mime.clone(),
+        name: name.clone(),
+        checksum: checksum.clone(),
+        total_size,
+        chunk_count,
+        received: 0,
+        chunks: vec![None; chunk_count as usize],
+        from_user_id,
+        from_identity: from_identity.clone(),
+    });
+    if entry.chunks.len() != chunk_count as usize {
+        entry.chunks.resize(chunk_count as usize, None);
+        entry.chunk_count = chunk_count;
+    }
+    if entry.chunks.get(chunk_index).is_none() {
+        return Err("chunk index out of bounds".into());
+    }
+    if entry.chunks[chunk_index].is_none() {
+        entry.chunks[chunk_index] = Some(chunk_bytes);
+        entry.received += 1;
+    }
+    if entry.received == entry.chunk_count {
+        // Assemble
+        let mut all = Vec::with_capacity(entry.total_size);
+        for i in 0..(entry.chunk_count as usize) {
+            if let Some(ref part) = entry.chunks[i] {
+                all.extend_from_slice(part);
+            } else {
+                return Err(format!("missing chunk {}", i));
+            }
+        }
+        if all.len() != entry.total_size {
+            return Err("size mismatch".into());
+        }
+        let mut hasher = Sha256::new();
+        hasher.update(&all);
+        let got = hex::encode(hasher.finalize());
+        if got != entry.checksum {
+            return Err("checksum mismatch".into());
+        }
+        let data_b64 = base64::engine::general_purpose::STANDARD.encode(&all);
+        let ev = serde_json::json!({
+            "type": "media_complete",
+            "from_user_id": entry.from_user_id,
+            "from_identity": entry.from_identity,
+            "mime": entry.mime,
+            "name": entry.name,
+            "checksum": entry.checksum,
+            "total_size": entry.total_size as u64,
+            "msg_id": msg_id,
+            "data_b64": data_b64,
+        })
+        .to_string();
+        map.remove(&msg_id);
+        drop(map);
+        emit_inbound(user_id, ev);
+    }
+    Ok(())
+}
 
 /// Enqueue a JSON line to the open TLS stream for `user_id`.
 fn enqueue(user_id: i64, msg: ClientMessage) -> Result<(), String> {
@@ -231,6 +358,15 @@ fn get_or_create_peer(user_id: i64, remote_id: i64) -> Result<Peer, String> {
                 let this_user = this_user;
                 Box::pin(async move {
                     if let Ok(text) = std::str::from_utf8(&msg.data) {
+                        // Attempt media reassembly first (JSON media envelope)
+                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(text)
+                            && v.get("type").and_then(|s| s.as_str()) == Some("media")
+                        {
+                            if let Err(e) = handle_media_chunk(v, this_user) {
+                                eprintln!("[rtc] media chunk error: {}", e);
+                            }
+                            return;
+                        }
                         println!(
                             "[rtc] rx (user {}) {} bytes: {}",
                             this_user,
@@ -239,6 +375,8 @@ fn get_or_create_peer(user_id: i64, remote_id: i64) -> Result<Peer, String> {
                         );
                         let forward = decrypt_body_in_event(text);
                         emit_inbound(this_user, forward);
+                    } else {
+                        // For now ignore raw binary frames in this revision.
                     }
                 })
             }));
@@ -322,6 +460,15 @@ pub fn ensure_offer(user_id: i64, remote_id: i64) -> Result<(), String> {
                     let rid2 = rid2;
                     Box::pin(async move {
                         if let Ok(text) = std::str::from_utf8(&msg.data) {
+                            // Attempt media reassembly first (JSON media envelope)
+                            if let Ok(v) = serde_json::from_str::<serde_json::Value>(text)
+                                && v.get("type").and_then(|s| s.as_str()) == Some("media")
+                            {
+                                if let Err(e) = handle_media_chunk(v, my_user) {
+                                    eprintln!("[rtc] media chunk error: {}", e);
+                                }
+                                return;
+                            }
                             println!(
                                 "[rtc] rx (user {} from {}) {} bytes: {}",
                                 my_user,
@@ -331,6 +478,8 @@ pub fn ensure_offer(user_id: i64, remote_id: i64) -> Result<(), String> {
                             );
                             let forward = decrypt_body_in_event(text);
                             emit_inbound(my_user, forward);
+                        } else {
+                            // For now ignore raw binary frames in this revision.
                         }
                     })
                 }));

@@ -25,6 +25,7 @@ tokio = { version = "1.47", features = ["rt-multi-thread", "time"] }
 hkdf = "0.12"
 sha2 = "0.10"
 x25519-dalek = "2"
+hex = "0.4"
 
 [dev-dependencies]
 tokio = { version = "1.47", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util"] }
