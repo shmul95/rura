@@ -239,19 +239,6 @@ Future<HistoryBundle> registerAndFetchHistoryTls({
 );
 
 /// Bundle returned by login/register + history.
-class HistoryBundle {
-  final bool success;
-  final String message;
-  final PlatformInt64? userId;
-  final List<HistoryMessage> messages;
-
-  const HistoryBundle({
-    required this.success,
-    required this.message,
-    this.userId,
-    required this.messages,
-});
-
 /// Send media bytes to a peer over the WebRTC data channel.
 Future<void> sendMediaToIdentity({
   required PlatformInt64 userId,
@@ -268,6 +255,19 @@ Future<void> sendMediaToIdentity({
   bytes: bytes,
   chunkSize: chunkSize,
 );
+
+class HistoryBundle {
+  final bool success;
+  final String message;
+  final PlatformInt64? userId;
+  final List<HistoryMessage> messages;
+
+  const HistoryBundle({
+    required this.success,
+    required this.message,
+    this.userId,
+    required this.messages,
+  });
 
   @override
   int get hashCode =>
