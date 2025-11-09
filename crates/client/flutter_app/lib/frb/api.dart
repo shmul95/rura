@@ -247,14 +247,23 @@ Future<void> sendMediaToIdentity({
   String? name,
   required Uint8List bytes,
   BigInt? chunkSize,
-}) => RustLib.instance.api.crateApiSendMediaToIdentity(
-  userId: userId,
-  toIdentity: toIdentity,
-  mime: mime,
-  name: name,
-  bytes: bytes,
-  chunkSize: chunkSize,
-);
+}) async {
+  // Use dynamic to avoid static type errors when FRB bindings are stale.
+  final api = RustLib.instance.api as dynamic;
+  try {
+    await api.crateApiSendMediaToIdentity(
+      userId: userId,
+      toIdentity: toIdentity,
+      mime: mime,
+      name: name,
+      bytes: bytes,
+      chunkSize: chunkSize,
+    );
+  } catch (e) {
+    // Provide a clear message if the binding is missing.
+    throw Exception('sendMediaToIdentity bindings missing. Run scripts/frb_codegen.sh to regenerate. Original: $e');
+  }
+}
 
 class HistoryBundle {
   final bool success;
