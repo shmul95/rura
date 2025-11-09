@@ -145,6 +145,14 @@ fn handle_media_chunk(v: serde_json::Value, user_id: i64) -> Result<(), String> 
     Ok(())
 }
 
+/// Test helper and external entry to feed a media-chunk JSON envelope into the
+/// reassembly logic. Accepts the exact JSON sent over the data channel as text.
+pub fn handle_media_chunk_json(user_id: i64, json: &str) -> Result<(), String> {
+    let v: serde_json::Value =
+        serde_json::from_str(json).map_err(|e| format!("invalid media json: {e}"))?;
+    handle_media_chunk(v, user_id)
+}
+
 /// Enqueue a JSON line to the open TLS stream for `user_id`.
 fn enqueue(user_id: i64, msg: ClientMessage) -> Result<(), String> {
     let tx = {
