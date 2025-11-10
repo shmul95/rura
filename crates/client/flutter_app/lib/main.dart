@@ -983,13 +983,7 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
   }
 
   Future<(Uint8List,String)?> _browseForImage(BuildContext context) async {
-    Directory start;
-    final home = Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'];
-    if (home != null && home.isNotEmpty) {
-      start = Directory(home);
-    } else {
-      start = Directory.current;
-    }
+    Directory start = _defaultImagesDir() ?? Directory.current;
 
     Directory current = start;
     String? selectedPath;
@@ -1001,7 +995,7 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
               .listSync()
               .whereType<FileSystemEntity>()
               .where((e) {
-                final name = e.uri.pathSegments.isNotEmpty ? e.uri.pathSegments.last : e.path;
+                final name = _basename(e.path);
                 // Show dirs and common image files
                 if (e is Directory) return true;
                 final lower = name.toLowerCase();
@@ -1014,7 +1008,7 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
                     ? 1
                     : a.path.compareTo(b.path));
           return AlertDialog(
-            title: Text('Choose image — ${current.path}'),
+            title: Text('Choose image — ${_basename(current.path)}'),
             content: SizedBox(
               width: 600,
               height: 400,
@@ -1022,11 +1016,11 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
                 itemCount: entries.length,
                 itemBuilder: (_, i) {
                   final e = entries[i];
-                  final name = e.uri.pathSegments.isNotEmpty ? e.uri.pathSegments.last : e.path;
+                  final name = _basename(e.path);
                   final isDir = e is Directory;
                   return ListTile(
                     leading: Icon(isDir ? Icons.folder : Icons.image),
-                    title: Text(name),
+                    title: Text(name.isEmpty ? e.path : name),
                     onTap: () async {
                       if (isDir) {
                         try {
@@ -1070,6 +1064,38 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
         });
       },
     );
+  }
+
+  // Prefer user's standard pictures/images dir if it exists.
+  Directory? _defaultImagesDir() {
+    try {
+      final home = Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'];
+      if (home != null && home.isNotEmpty) {
+        final candidates = <String>[
+          '$home/Pictures', // Linux/macOS common
+          '$home/Pictures/',
+          '$home/Images',
+          '$home/images',
+        ];
+        for (final p in candidates) {
+          final d = Directory(p);
+          if (d.existsSync()) return d;
+        }
+        return Directory(home);
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  String _basename(String path) {
+    if (path.isEmpty) return path;
+    var p = path;
+    while (p.endsWith('/') || p.endsWith('\\')) {
+      if (p.length <= 1) break;
+      p = p.substring(0, p.length - 1);
+    }
+    final idx = p.lastIndexOf(RegExp(r'[\\/]'));
+    return idx >= 0 ? p.substring(idx + 1) : p;
   }
 
   @override
