@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:video_player/video_player.dart';
+import 'dart:typed_data';
 import 'frb/api.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'frb/frb_generated.dart';
@@ -474,11 +476,65 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
           // Already handled by HomePage; ignore here
           return;
         }
+        if (map['type'] == 'media_complete') {
+          // Save media message into conversation and show inline in UI using a body marker
+          final isIdentity = map.containsKey('from_identity');
+          final from = isIdentity
+              ? idToNumeric((map['from_identity'] ?? '').toString())
+              : (map['from_user_id'] as int);
+          if (isIdentity) {
+            final rid = (map['from_identity'] ?? '').toString();
+            if (rid.isNotEmpty) {
+              setState(() => _identityByPeer[from] = rid);
+            }
+          }
+          final now = DateTime.now().toIso8601String();
+          final filePath = (map['file_path'] ?? '').toString();
+          String body;
+          final mime = (map['mime'] ?? '').toString();
+          if (filePath.isNotEmpty && File(filePath).existsSync()) {
+            body = (mime.startsWith('image/') ? 'IMG:' : 'FILE:') + filePath;
+          } else {
+            // Fallback: reconstruct from data_b64 when file_path missing
+            final b64 = (map['data_b64'] ?? '').toString();
+            if (b64.isNotEmpty) {
+              try {
+                final bytes = base64.decode(b64);
+                final name = (map['name'] ?? 'image').toString();
+                final saved = await _saveBytesToData(bytes, mime, suggestedName: name);
+                body = (mime.startsWith('image/') ? 'IMG:' : 'FILE:') + saved;
+              } catch (_) {
+                body = mime.startsWith('image/') ? '[image received]' : '[file received]';
+              }
+            } else {
+              body = mime.startsWith('image/') ? '[image received]' : '[file received]';
+            }
+          }
+          await appendLocalMessage(
+            fromUserId: from,
+            toUserId: _selfId,
+            body: body,
+            timestamp: now,
+          );
+          final msg = HistoryMessage(id: 0, fromUserId: from, toUserId: _selfId, body: body, timestamp: now);
+          _incoming.add(msg);
+          setState(() {
+            _groups.putIfAbsent(from, () => []);
+            _groups[from]!.add(msg);
+          });
+          return;
+        }
         // Support both numeric and identity-based events
         final bool isIdentity = map.containsKey('from_identity');
         final int from = isIdentity
             ? idToNumeric((map['from_identity'] ?? '').toString())
             : (map['from_user_id'] as int);
+        if (isIdentity) {
+          final rid = (map['from_identity'] ?? '').toString();
+          if (rid.isNotEmpty) {
+            setState(() => _identityByPeer[from] = rid);
+          }
+        }
         final bodyRaw = map['body'] as String? ?? '';
         final body = _decodeEnvelope(bodyRaw);
         final now = DateTime.now().toIso8601String();
@@ -618,8 +674,8 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
               foregroundColor: Colors.black,
               child: Icon(Icons.person),
             ),
-            title: Text(_nicknames[peerId] ?? 'User $peerId'),
-            subtitle: Text(last?.body ?? '', maxLines: 1, overflow: TextOverflow.ellipsis),
+            title: Text(_nicknames[peerId] ?? _identityByPeer[peerId] ?? peerId.toString()),
+            subtitle: Text(_previewText(last?.body ?? '')), 
             trailing: Text(
               last != null ? _formatTime(last.timestamp) : '',
               style: Theme.of(context).textTheme.bodySmall,
@@ -740,6 +796,9 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
   @override
   void initState() {
     super.initState();
+    _displayName = (widget.recipientName != null && widget.recipientName!.isNotEmpty)
+        ? widget.recipientName
+        : widget.recipientId;
     // Load existing conversation from local DB so the view is not empty
     _loadFromLocal();
     // Prefer processed inbound HistoryMessage stream for live refresh
@@ -939,12 +998,195 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
     }
   }
 
+  String _guessMime(String name) {
+    final lower = name.toLowerCase();
+    if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+    if (lower.endsWith('.png')) return 'image/png';
+    if (lower.endsWith('.gif')) return 'image/gif';
+    if (lower.endsWith('.webp')) return 'image/webp';
+    if (lower.endsWith('.bmp')) return 'image/bmp';
+    if (lower.endsWith('.heic') || lower.endsWith('.heif')) return 'image/heic';
+    if (lower.endsWith('.mp4')) return 'video/mp4';
+    if (lower.endsWith('.mov')) return 'video/quicktime';
+    if (lower.endsWith('.webm')) return 'video/webm';
+    if (lower.endsWith('.mkv')) return 'video/x-matroska';
+    if (lower.endsWith('.mp3')) return 'audio/mpeg';
+    if (lower.endsWith('.wav')) return 'audio/wav';
+    if (lower.endsWith('.ogg')) return 'audio/ogg';
+    if (lower.endsWith('.pdf')) return 'application/pdf';
+    if (lower.endsWith('.txt')) return 'text/plain';
+    return 'application/octet-stream';
+  }
+
+  Future<void> _pickAndSendFile() async {
+    // In-app fallback file chooser (no external plugin). Starts at user's home.
+    if (_sending) return;
+    setState(() => _sending = true);
+    try {
+      final picked = await _browseForFile(context);
+      if (picked == null) return;
+      final bytes = picked.$1;
+      final name = picked.$2;
+      final mime = _guessMime(name);
+      // Call FRB to send chunked media over WebRTC
+      await sendMediaToIdentity(
+        userId: widget.selfUserId,
+        toIdentity: widget.recipientId,
+        mime: mime,
+        name: name,
+        bytes: bytes,
+        chunkSize: BigInt.from(12 * 1024),
+      );
+      // Locally reflect the sent file in our conversation immediately.
+      final savedPath = await _saveBytesToData(bytes, mime, suggestedName: name);
+      if (savedPath.isNotEmpty) {
+        final now = DateTime.now().toIso8601String();
+        final peer = idToNumeric(widget.recipientId);
+        final isImg = mime.startsWith('image/');
+        final msg = HistoryMessage(
+          id: 0,
+          fromUserId: widget.selfUserId,
+          toUserId: peer,
+          body: (isImg ? 'IMG:' : 'FILE:') + savedPath,
+          timestamp: now,
+        );
+        await appendLocalMessage(
+          fromUserId: msg.fromUserId,
+          toUserId: msg.toUserId,
+          body: msg.body,
+          timestamp: msg.timestamp,
+        );
+        if (mounted) {
+          setState(() => _messages.add(msg));
+          if (_scroll.hasClients) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (_scroll.hasClients) {
+                _scroll.jumpTo(_scroll.position.maxScrollExtent + 120);
+              }
+            });
+          }
+        }
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('File send failed: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  Future<(Uint8List,String)?> _browseForFile(BuildContext context) async {
+    Directory start = _defaultImagesDir() ?? Directory.current;
+
+    Directory current = start;
+    String? selectedPath;
+    return showDialog<(Uint8List,String)?>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(builder: (ctx, setState) {
+          final entries = current
+              .listSync()
+              .whereType<FileSystemEntity>()
+              .toList()
+            ..sort((a, b) => a is Directory && b is! Directory
+                ? -1
+                : a is! Directory && b is Directory
+                    ? 1
+                    : a.path.compareTo(b.path));
+          return AlertDialog(
+            title: Text('Choose file — ${_basename(current.path)}'),
+            content: SizedBox(
+              width: 600,
+              height: 400,
+              child: ListView.builder(
+                itemCount: entries.length,
+                itemBuilder: (_, i) {
+                  final e = entries[i];
+                  final name = _basename(e.path);
+                  final isDir = e is Directory;
+                  return ListTile(
+                    leading: Icon(isDir ? Icons.folder : Icons.attach_file),
+                    title: Text(name.isEmpty ? e.path : name),
+                    onTap: () async {
+                      if (isDir) {
+                        try {
+                          current = Directory(e.path);
+                          setState(() {});
+                        } catch (_) {}
+                      } else {
+                        selectedPath = e.path;
+                        try {
+                          final bytes = await File(e.path).readAsBytes();
+                          if (ctx.mounted) Navigator.of(ctx).pop((bytes, name));
+                        } catch (err) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Failed to read file: $err')),
+                          );
+                        }
+                      }
+                    },
+                  );
+                },
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () async {
+                  // Go up one directory if possible
+                  final parent = current.parent;
+                  if (parent.path != current.path) {
+                    current = parent;
+                    setState(() {});
+                  }
+                },
+                child: const Text('Up'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(null),
+                child: const Text('Cancel'),
+              ),
+            ],
+          );
+        });
+      },
+    );
+  }
+
+  // Start in user's home directory for file picker.
+  Directory? _defaultImagesDir() {
+    try {
+      final home = Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'];
+      if (home != null && home.isNotEmpty) {
+        return Directory(home);
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  String _basename(String path) {
+    if (path.isEmpty) return path;
+    var p = path;
+    while (p.endsWith('/') || p.endsWith('\\')) {
+      if (p.length <= 1) break;
+      p = p.substring(0, p.length - 1);
+    }
+    final idx = p.lastIndexOf(RegExp(r'[\\/]'));
+    return idx >= 0 ? p.substring(idx + 1) : p;
+  }
+
+  String? _displayName;
+
   @override
   Widget build(BuildContext context) {
-    final ridShort = widget.recipientId.length > 10 ? widget.recipientId.substring(0, 10) + '…' : widget.recipientId;
-    final title = widget.recipientName?.isNotEmpty == true ? widget.recipientName! : 'Chat: $ridShort';
+    final title = _displayName ?? widget.recipientId;
     return Scaffold(
-      appBar: AppBar(title: Text(title)),
+      appBar: AppBar(
+        title: GestureDetector(
+          onTap: _promptRename,
+          child: Text(title),
+        ),
+      ),
       body: Column(
         children: [
           Expanded(
@@ -968,10 +1210,7 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
                     child: Column(
                       crossAxisAlignment: fromSelf ? CrossAxisAlignment.end : CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          m.body,
-                          style: TextStyle(color: fromSelf ? Colors.white : Colors.black),
-                        ),
+                        _renderMessageBody(m, fromSelf),
                         const SizedBox(height: 4),
                         Text(
                           _formatTime(m.timestamp),
@@ -989,6 +1228,11 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
               padding: const EdgeInsets.all(8),
               child: Row(
                 children: [
+                  IconButton(
+                    tooltip: 'Attach',
+                    onPressed: _sending ? null : _pickAndSendFile,
+                    icon: const Icon(Icons.attach_file),
+                  ),
                   Expanded(
                     child: TextField(
                       controller: _input,
@@ -1020,6 +1264,66 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
         ],
       ),
     );
+  }
+
+  Future<void> _promptRename() async {
+    final ctrl = TextEditingController(text: _displayName ?? widget.recipientId);
+    final newName = await showDialog<String?>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Set nickname'),
+        content: TextField(
+          controller: ctrl,
+          decoration: const InputDecoration(hintText: 'Enter a nickname'),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(null), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()), child: const Text('Save')),
+        ],
+      ),
+    );
+    if (newName == null) return;
+    try {
+      await setContactNickname(userId: widget.recipientId, nickname: newName.isEmpty ? null : newName);
+      await _updateNicknameFile(idToNumeric(widget.recipientId), newName);
+      if (mounted) setState(() => _displayName = newName.isEmpty ? widget.recipientId : newName);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Nickname updated')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to update: $e')));
+      }
+    }
+  }
+
+  Future<void> _updateNicknameFile(int peerNumeric, String newName) async {
+    try {
+      // Mirror ChatListPage local JSON structure
+      final envDir = Platform.environment['RURA_CLIENT_DATA_DIR'];
+      final baseDir = envDir != null && envDir.trim().isNotEmpty ? Directory(envDir) : Directory('../data');
+      if (!baseDir.existsSync()) {
+        await baseDir.create(recursive: true);
+      }
+      final f = File('${baseDir.path}/nicknames.json');
+      Map<String, dynamic> data = {'nicknames': <String, String>{}, 'identities': <String, String>{}};
+      if (await f.exists()) {
+        try {
+          final raw = await f.readAsString();
+          final parsed = jsonDecode(raw);
+          if (parsed is Map) data = parsed.map((k, v) => MapEntry(k.toString(), v));
+        } catch (_) {}
+      }
+      final nicks = (data['nicknames'] as Map?)?.map((k, v) => MapEntry(k.toString(), v.toString())) ?? <String, String>{};
+      final ids = (data['identities'] as Map?)?.map((k, v) => MapEntry(k.toString(), v.toString())) ?? <String, String>{};
+      nicks[peerNumeric.toString()] = newName;
+      ids.putIfAbsent(peerNumeric.toString(), () => widget.recipientId);
+      data['nicknames'] = nicks;
+      data['identities'] = ids;
+      await f.writeAsString(jsonEncode(data));
+    } catch (_) {
+      // best effort
+    }
   }
 }
 
@@ -1184,12 +1488,7 @@ class _ChatPageState extends State<ChatPage> {
                     child: Column(
                       crossAxisAlignment: fromSelf ? CrossAxisAlignment.end : CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          m.body,
-                          style: TextStyle(
-                            color: fromSelf ? Colors.white : Colors.black,
-                          ),
-                        ),
+                        _renderMessageBody(m, fromSelf),
                         const SizedBox(height: 4),
                         Text(
                           _formatTime(m.timestamp),
@@ -1334,4 +1633,203 @@ String _decodeEnvelope(String body) {
     }
   }
   return body;
+}
+
+Widget _renderMessageBody(HistoryMessage m, bool fromSelf) {
+  final body = m.body;
+  if (body.startsWith('IMG:')) {
+    final path = body.substring(4);
+    final f = File(path);
+    if (f.existsSync()) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: Image.file(
+          f,
+          width: 240,
+          fit: BoxFit.cover,
+          errorBuilder: (_, __, ___) => Text('[image] ${path.split('/').last}', style: TextStyle(color: fromSelf ? Colors.white : Colors.black)),
+        ),
+      );
+    }
+    return Text('[image missing] ${path.split('/').last}', style: TextStyle(color: fromSelf ? Colors.white : Colors.black));
+  }
+  if (body.startsWith('FILE:')) {
+    final path = body.substring(5);
+    final lower = path.toLowerCase();
+    final isVideo = lower.endsWith('.mp4') || lower.endsWith('.mov') || lower.endsWith('.webm') || lower.endsWith('.mkv');
+    if (isVideo && File(path).existsSync()) {
+      return SizedBox(
+        width: 240,
+        height: 160,
+        child: _InlineVideoPlayer(filePath: path),
+      );
+    }
+    final name = path.split('/').isNotEmpty ? path.split('/').last : path;
+    return InkWell(
+      onTap: () => _openFilePath(path),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.attach_file, size: 18, color: fromSelf ? Colors.white : Colors.black),
+          const SizedBox(width: 6),
+          Flexible(
+            child: Text(name, style: TextStyle(color: fromSelf ? Colors.white : Colors.black), overflow: TextOverflow.ellipsis),
+          ),
+        ],
+      ),
+    );
+  }
+  if (body.startsWith('FILE:')) {
+    final path = body.substring(5);
+    final name = path.split('/').isNotEmpty ? path.split('/').last : path;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(Icons.attach_file, size: 18, color: fromSelf ? Colors.white : Colors.black),
+        const SizedBox(width: 6),
+        Flexible(
+          child: Text(name, style: TextStyle(color: fromSelf ? Colors.white : Colors.black), overflow: TextOverflow.ellipsis),
+        ),
+      ],
+    );
+  }
+  return Text(body, style: TextStyle(color: fromSelf ? Colors.white : Colors.black));
+}
+
+Future<String> _saveBytesToData(Uint8List bytes, String mime, {String? suggestedName}) async {
+  try {
+    // Mirror Rust path logic: ../data/images|videos|files under app dir
+    Directory dir;
+    if (mime.startsWith('image/')) {
+      dir = Directory('../data/images');
+    } else if (mime.startsWith('video/')) {
+      dir = Directory('../data/videos');
+    } else {
+      dir = Directory('../data/files');
+    }
+    if (!dir.existsSync()) {
+      await dir.create(recursive: true);
+    }
+    var name = suggestedName ?? 'file';
+    name = name.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
+    if (name.isEmpty) name = 'file';
+    var path = '${dir.path}/$name';
+    var file = File(path);
+    if (await file.exists()) {
+      int i = 1;
+      while (await File('${dir.path}/${name}_$i').exists()) {
+        i++;
+        if (i > 1000) break;
+      }
+      path = '${dir.path}/${name}_$i';
+      file = File(path);
+    }
+    await file.writeAsBytes(bytes);
+    try {
+      return file.resolveSymbolicLinksSync();
+    } catch (_) {
+      return file.path;
+    }
+  } catch (_) {
+    return '';
+  }
+}
+
+String _previewText(String body) {
+  if (body.startsWith('IMG:')) return '[image]';
+  if (body.startsWith('FILE:')) return '[file] ' + (body.split('/').isNotEmpty ? body.split('/').last : '');
+  return body;
+}
+
+Future<void> _openFilePath(String path) async {
+  try {
+    if (Platform.isLinux) {
+      await Process.run('xdg-open', [path]);
+    } else if (Platform.isMacOS) {
+      await Process.run('open', [path]);
+    } else if (Platform.isWindows) {
+      await Process.run('cmd', ['/c', 'start', '', path]);
+    }
+  } catch (_) {
+    // ignore
+  }
+}
+
+class _InlineVideoPlayer extends StatefulWidget {
+  final String filePath;
+  const _InlineVideoPlayer({required this.filePath});
+  @override
+  State<_InlineVideoPlayer> createState() => _InlineVideoPlayerState();
+}
+
+class _InlineVideoPlayerState extends State<_InlineVideoPlayer> {
+  late VideoPlayerController _controller;
+  bool _ready = false;
+  bool _error = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = VideoPlayerController.file(File(widget.filePath))
+      ..initialize().then((_) {
+        if (mounted) setState(() => _ready = true);
+      }).catchError((_) {
+        if (mounted) setState(() => _error = true);
+      });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _toggle() {
+    if (!_ready) return;
+    setState(() {
+      if (_controller.value.isPlaying) {
+        _controller.pause();
+      } else {
+        _controller.play();
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_error) return const Text('[video unsupported]');
+    if (!_ready) return const Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)));
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        FittedBox(
+          fit: BoxFit.cover,
+          child: SizedBox(
+            width: _controller.value.size.width,
+            height: _controller.value.size.height,
+            child: VideoPlayer(_controller),
+          ),
+        ),
+        Positioned.fill(
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: _toggle,
+              child: Center(
+                child: Container(
+                  decoration: BoxDecoration(color: Colors.black45, borderRadius: BorderRadius.circular(24)),
+                  padding: const EdgeInsets.all(8),
+                  child: Icon(
+                    _controller.value.isPlaying ? Icons.pause : Icons.play_arrow,
+                    color: Colors.white,
+                    size: 28,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 }

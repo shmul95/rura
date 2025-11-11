@@ -6,9 +6,8 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `auth_over_stream`, `build_root_store_from_pem`, `cache_base_dir`, `chat_file`, `chats_dir`, `ensure_dir`, `fetch_history_over_stream`, `list_chat_files`, `make_tls_stream`, `read_chat`, `read_line`, `user_dir`, `write_chat`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `LocalMsg`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`
+// These functions are ignored because they are not marked as `pub`: `auth_over_stream`, `build_root_store_from_pem`, `fetch_history_over_stream`, `make_tls_stream`, `read_line`, `session_id_from_identity`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`, `from`
 
 Future<void> appendLocalMessage({
   required PlatformInt64 fromUserId,
@@ -36,6 +35,33 @@ Future<String> getAccountPubkey() =>
 Future<void> addContact({required String userId, required String pubkey}) =>
     RustLib.instance.api.crateApiAddContact(userId: userId, pubkey: pubkey);
 
+/// Add or update a contact with optional nickname.
+Future<void> addContactWithNickname({
+  required String userId,
+  required String pubkey,
+  String? nickname,
+}) => RustLib.instance.api.crateApiAddContactWithNickname(
+  userId: userId,
+  pubkey: pubkey,
+  nickname: nickname,
+);
+
+/// List contacts as a JSON array [{user_id, pubkey, nickname}].
+Future<String> listContactsJson() =>
+    RustLib.instance.api.crateApiListContactsJson();
+
+/// Encrypt plaintext for a contact identity using their published public key.
+Future<String> encryptMessageForIdentity({
+  required String toIdentity,
+  required String plaintext,
+}) => RustLib.instance.api.crateApiEncryptMessageForIdentity(
+  toIdentity: toIdentity,
+  plaintext: plaintext,
+);
+
+/// Decrypt a v1 envelope into plaintext using our private key.
+Future<String> decryptMessageFromEnvelope({required String envelope}) =>
+    RustLib.instance.api.crateApiDecryptMessageFromEnvelope(envelope: envelope);
 
 /// Login to the TLS-only server and return the auth response.
 ///
@@ -132,6 +158,29 @@ Future<void> sendDirectMessageOverStream({
   body: body,
 );
 
+/// Send media bytes to a peer over the WebRTC data channel using chunked messages.
+///
+/// The payload is split into fixed-size chunks. Each chunk is wrapped in a JSON envelope
+/// and sent as a text message over the data channel. The receiver can reassemble chunks
+/// using `msg_id`, verify the `checksum`, and reconstruct the original file.
+///
+/// This keeps server completely out of the data path; all transfer is P2P via WebRTC.
+Future<void> sendMediaToIdentity({
+  required PlatformInt64 userId,
+  required String toIdentity,
+  required String mime,
+  String? name,
+  required List<int> bytes,
+  BigInt? chunkSize,
+}) => RustLib.instance.api.crateApiSendMediaToIdentity(
+  userId: userId,
+  toIdentity: toIdentity,
+  mime: mime,
+  name: name,
+  bytes: bytes,
+  chunkSize: chunkSize,
+);
+
 /// Send a direct message targeting a peer by identity (base64 string) using an existing stream.
 Future<void> sendDirectMessageOverStreamToIdentity({
   required PlatformInt64 userId,
@@ -151,6 +200,13 @@ Future<void> setPubkeyOverStream({
   userId: userId,
   pubkey: pubkey,
 );
+
+/// Update (or set) a contact's nickname by identity (base64). Does not require a pubkey.
+Future<void> setContactNickname({required String userId, String? nickname}) =>
+    RustLib.instance.api.crateApiSetContactNickname(
+      userId: userId,
+      nickname: nickname,
+    );
 
 /// One-off helper: login and fetch another user's published public key.
 Future<String?> getPubkeyTls({

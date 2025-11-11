@@ -37,6 +37,122 @@ pub fn data_dir_exists() -> bool {
     data_dir().exists()
 }
 
+/// Ensure and return the images directory used for media downloads.
+pub fn ensure_images_dir() -> Result<PathBuf, String> {
+    let dir = data_dir().join("images");
+    ensure_dir(&dir)?;
+    Ok(dir)
+}
+
+/// Ensure and return the videos directory used for media downloads.
+pub fn ensure_videos_dir() -> Result<PathBuf, String> {
+    let dir = data_dir().join("videos");
+    ensure_dir(&dir)?;
+    Ok(dir)
+}
+
+/// Ensure and return the generic files directory used for non-image/video downloads.
+pub fn ensure_files_dir() -> Result<PathBuf, String> {
+    let dir = data_dir().join("files");
+    ensure_dir(&dir)?;
+    Ok(dir)
+}
+
+fn sanitize_filename(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
+            out.push(ch);
+        } else {
+            out.push('_');
+        }
+    }
+    // Avoid empty or dot names
+    let s = out.trim_matches('.');
+    if s.is_empty() {
+        "file".to_string()
+    } else {
+        s.to_string()
+    }
+}
+
+/// Save raw bytes under the images directory. Returns an absolute path when possible.
+pub fn save_bytes_to_images_dir(
+    bytes: &[u8],
+    suggested_name: Option<&str>,
+) -> Result<PathBuf, String> {
+    let dir = ensure_images_dir()?;
+    let mut name = suggested_name.unwrap_or("file").to_string();
+    name = sanitize_filename(&name);
+    if name.is_empty() {
+        name = "file".to_string();
+    }
+    let mut path = dir.join(&name);
+    // Deduplicate if exists
+    if path.exists() {
+        let mut i = 1;
+        loop {
+            let candidate = dir.join(format!("{}_{}", name, i));
+            if !candidate.exists() {
+                path = candidate;
+                break;
+            }
+            i += 1;
+            if i > 1000 {
+                break;
+            }
+        }
+    }
+    fs::write(&path, bytes).map_err(|e| format!("write {}: {}", path.display(), e))?;
+    // Try to return absolute path
+    if let Ok(abs) = fs::canonicalize(&path) {
+        Ok(abs)
+    } else {
+        Ok(path)
+    }
+}
+
+/// Save raw bytes under an appropriate directory based on MIME type (images/, videos/, files/).
+pub fn save_bytes_by_mime(
+    bytes: &[u8],
+    suggested_name: Option<&str>,
+    mime: &str,
+) -> Result<PathBuf, String> {
+    let dir = if mime.starts_with("image/") {
+        ensure_images_dir()?
+    } else if mime.starts_with("video/") {
+        ensure_videos_dir()?
+    } else {
+        ensure_files_dir()?
+    };
+    let mut name = suggested_name.unwrap_or("file").to_string();
+    name = sanitize_filename(&name);
+    if name.is_empty() {
+        name = "file".to_string();
+    }
+    let mut path = dir.join(&name);
+    if path.exists() {
+        let mut i = 1;
+        loop {
+            let candidate = dir.join(format!("{}_{}", name, i));
+            if !candidate.exists() {
+                path = candidate;
+                break;
+            }
+            i += 1;
+            if i > 1000 {
+                break;
+            }
+        }
+    }
+    fs::write(&path, bytes).map_err(|e| format!("write {}: {}", path.display(), e))?;
+    if let Ok(abs) = fs::canonicalize(&path) {
+        Ok(abs)
+    } else {
+        Ok(path)
+    }
+}
+
 fn init_persistent_schema(conn: &Connection) -> Result<(), String> {
     // Basic PRAGMAs suitable for local storage
     conn.execute_batch(
@@ -384,6 +500,29 @@ pub fn snapshot_persistent() -> Result<(), String> {
 #[cfg(test)]
 pub(crate) fn reset_store_for_tests() {
     *STORE.lock().unwrap() = None;
+}
+
+/// Update or set a contact nickname without changing the stored public key.
+pub fn set_contact_nickname(user_id: String, nickname: Option<String>) -> Result<(), String> {
+    with_store(|store| {
+        let conn = store.persistent.lock().unwrap();
+        let mut stmt = conn
+            .prepare("UPDATE contacts SET nickname = ?1 WHERE user_id = ?2")
+            .map_err(|e| format!("prepare update nickname failed: {e}"))?;
+        let changed = stmt
+            .execute(params![nickname, user_id])
+            .map_err(|e| format!("update nickname failed: {e}"))?;
+        if changed == 0 {
+            // Insert a new row with empty pubkey and nickname
+            conn.execute(
+                "INSERT INTO contacts (user_id, pubkey, nickname) VALUES (?1, ?2, ?3)",
+                params![user_id, "", nickname],
+            )
+            .map_err(|e| format!("insert nickname failed: {e}"))?;
+        }
+        Ok::<(), String>(())
+    })?;
+    flush_persistent()
 }
 
 /// Add or update a contact's public key by their user identity (base64 string).

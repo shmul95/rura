@@ -18,6 +18,8 @@ use std::io::{self, Read, Write};
 use std::net::TcpStream;
 // no path utilities needed after removing legacy JSON cache
 use crate::webrtc;
+use rand::RngCore;
+use sha2::{Digest, Sha256};
 use std::sync::{Arc, Once};
 
 fn session_id_from_identity(id_b64: &str) -> Result<i64, String> {
@@ -842,6 +844,83 @@ pub fn send_direct_message_over_stream(
     crate::webrtc::queue_or_send(to_user_id, event)
 }
 
+/// Send media bytes to a peer over the WebRTC data channel using chunked messages.
+///
+/// The payload is split into fixed-size chunks. Each chunk is wrapped in a JSON envelope
+/// and sent as a text message over the data channel. The receiver can reassemble chunks
+/// using `msg_id`, verify the `checksum`, and reconstruct the original file.
+///
+/// This keeps server completely out of the data path; all transfer is P2P via WebRTC.
+#[frb]
+pub fn send_media_to_identity(
+    user_id: i64,
+    to_identity: String,
+    mime: String,
+    name: Option<String>,
+    bytes: Vec<u8>,
+    chunk_size: Option<usize>,
+) -> Result<(), String> {
+    // Ensure RTC path is negotiated
+    let remote_id = crate::webrtc::session_id_from_identity(&to_identity)
+        .map_err(|_| "Invalid recipient identity".to_string())?;
+    let _ = crate::webrtc::ensure_offer_to_identity(user_id, &to_identity);
+
+    // Compute checksum
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    let digest = hasher.finalize();
+    let checksum = hex::encode(digest);
+
+    // Derive a random message id (u128 -> hex)
+    let mut rng = rand::thread_rng();
+    let mut hi = [0u8; 8];
+    let mut lo = [0u8; 8];
+    rng.fill_bytes(&mut hi);
+    rng.fill_bytes(&mut lo);
+    let msg_id = {
+        let mut buf = [0u8; 16];
+        buf[..8].copy_from_slice(&hi);
+        buf[8..].copy_from_slice(&lo);
+        hex::encode(buf)
+    };
+
+    // Chunk and send as JSON text events to stay compatible with existing DC handlers.
+    let total = bytes.len();
+    let csize = chunk_size.unwrap_or(12 * 1024); // conservative size for DC text frames
+    let mut offset = 0usize;
+    let mut idx: u32 = 0;
+    let chunks = total.div_ceil(csize) as u32;
+    let my_identity = crate::security::load_identity()
+        .map_err(|e| format!("identity: {e}"))?
+        .map(|b| b.user_id)
+        .unwrap_or_default();
+
+    while offset < total {
+        let end = std::cmp::min(offset + csize, total);
+        let slice = &bytes[offset..end];
+        let data_b64 = base64::engine::general_purpose::STANDARD.encode(slice);
+        let event = serde_json::json!({
+            "type": "media",
+            "from_user_id": user_id,
+            "from_identity": my_identity,
+            "to_identity": to_identity,
+            "mime": mime,
+            "name": name,
+            "checksum": checksum,
+            "total_size": total as u64,
+            "msg_id": msg_id,
+            "chunk_index": idx,
+            "chunk_count": chunks,
+            "data_b64": data_b64,
+        })
+        .to_string();
+        crate::webrtc::queue_or_send(remote_id, event.clone())?;
+        offset = end;
+        idx += 1;
+    }
+    Ok(())
+}
+
 /// Send a direct message targeting a peer by identity (base64 string) using an existing stream.
 #[frb]
 pub fn send_direct_message_over_stream_to_identity(
@@ -940,6 +1019,13 @@ pub fn set_pubkey_over_stream(user_id: i64, pubkey: String) -> Result<(), String
     line.push('\n');
     tx.send(line)
         .map_err(|_| "Failed to enqueue set_pubkey".to_string())
+}
+
+/// Update (or set) a contact's nickname by identity (base64). Does not require a pubkey.
+#[frb]
+pub fn set_contact_nickname(user_id: String, nickname: Option<String>) -> Result<(), String> {
+    crate::local_storage::init_storage()?;
+    crate::local_storage::set_contact_nickname(user_id, nickname)
 }
 
 /// One-off helper: login and fetch another user's published public key.
