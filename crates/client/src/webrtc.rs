@@ -198,11 +198,11 @@ fn handle_media_chunk(v: serde_json::Value, user_id: i64) -> Result<(), String> 
                 &entry.checksum.chars().take(8).collect::<String>()
             ),
         };
-        let file_path = match crate::local_storage::save_bytes_to_images_dir(&all, Some(&filename))
-        {
-            Ok(p) => p.to_string_lossy().to_string(),
-            Err(_) => String::new(),
-        };
+        let file_path =
+            match crate::local_storage::save_bytes_by_mime(&all, Some(&filename), &entry.mime) {
+                Ok(p) => p.to_string_lossy().to_string(),
+                Err(_) => String::new(),
+            };
         let data_b64 = base64::engine::general_purpose::STANDARD.encode(&all);
         let ev = serde_json::json!({
             "type": "media_complete",

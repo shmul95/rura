@@ -44,6 +44,20 @@ pub fn ensure_images_dir() -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+/// Ensure and return the videos directory used for media downloads.
+pub fn ensure_videos_dir() -> Result<PathBuf, String> {
+    let dir = data_dir().join("videos");
+    ensure_dir(&dir)?;
+    Ok(dir)
+}
+
+/// Ensure and return the generic files directory used for non-image/video downloads.
+pub fn ensure_files_dir() -> Result<PathBuf, String> {
+    let dir = data_dir().join("files");
+    ensure_dir(&dir)?;
+    Ok(dir)
+}
+
 fn sanitize_filename(name: &str) -> String {
     let mut out = String::with_capacity(name.len());
     for ch in name.chars() {
@@ -91,6 +105,47 @@ pub fn save_bytes_to_images_dir(
     }
     fs::write(&path, bytes).map_err(|e| format!("write {}: {}", path.display(), e))?;
     // Try to return absolute path
+    if let Ok(abs) = fs::canonicalize(&path) {
+        Ok(abs)
+    } else {
+        Ok(path)
+    }
+}
+
+/// Save raw bytes under an appropriate directory based on MIME type (images/, videos/, files/).
+pub fn save_bytes_by_mime(
+    bytes: &[u8],
+    suggested_name: Option<&str>,
+    mime: &str,
+) -> Result<PathBuf, String> {
+    let dir = if mime.starts_with("image/") {
+        ensure_images_dir()?
+    } else if mime.starts_with("video/") {
+        ensure_videos_dir()?
+    } else {
+        ensure_files_dir()?
+    };
+    let mut name = suggested_name.unwrap_or("file").to_string();
+    name = sanitize_filename(&name);
+    if name.is_empty() {
+        name = "file".to_string();
+    }
+    let mut path = dir.join(&name);
+    if path.exists() {
+        let mut i = 1;
+        loop {
+            let candidate = dir.join(format!("{}_{}", name, i));
+            if !candidate.exists() {
+                path = candidate;
+                break;
+            }
+            i += 1;
+            if i > 1000 {
+                break;
+            }
+        }
+    }
+    fs::write(&path, bytes).map_err(|e| format!("write {}: {}", path.display(), e))?;
     if let Ok(abs) = fs::canonicalize(&path) {
         Ok(abs)
     } else {

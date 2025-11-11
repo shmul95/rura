@@ -500,7 +500,7 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
               try {
                 final bytes = base64.decode(b64);
                 final name = (map['name'] ?? 'image').toString();
-                final saved = await _saveImageToData(bytes, suggestedName: name);
+                final saved = await _saveBytesToData(bytes, mime, suggestedName: name);
                 body = (mime.startsWith('image/') ? 'IMG:' : 'FILE:') + saved;
               } catch (_) {
                 body = mime.startsWith('image/') ? '[image received]' : '[file received]';
@@ -1037,7 +1037,7 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
         chunkSize: BigInt.from(12 * 1024),
       );
       // Locally reflect the sent file in our conversation immediately.
-      final savedPath = await _saveImageToData(bytes, suggestedName: name);
+      final savedPath = await _saveBytesToData(bytes, mime, suggestedName: name);
       if (savedPath.isNotEmpty) {
         final now = DateTime.now().toIso8601String();
         final peer = idToNumeric(widget.recipientId);
@@ -1669,16 +1669,23 @@ Widget _renderMessageBody(HistoryMessage m, bool fromSelf) {
   return Text(body, style: TextStyle(color: fromSelf ? Colors.white : Colors.black));
 }
 
-Future<String> _saveImageToData(Uint8List bytes, {String? suggestedName}) async {
+Future<String> _saveBytesToData(Uint8List bytes, String mime, {String? suggestedName}) async {
   try {
-    // Mirror Rust path logic: ../data/images under app dir
-    var dir = Directory('../data/images');
+    // Mirror Rust path logic: ../data/images|videos|files under app dir
+    Directory dir;
+    if (mime.startsWith('image/')) {
+      dir = Directory('../data/images');
+    } else if (mime.startsWith('video/')) {
+      dir = Directory('../data/videos');
+    } else {
+      dir = Directory('../data/files');
+    }
     if (!dir.existsSync()) {
       await dir.create(recursive: true);
     }
-    var name = suggestedName ?? 'image';
+    var name = suggestedName ?? 'file';
     name = name.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
-    if (name.isEmpty) name = 'image';
+    if (name.isEmpty) name = 'file';
     var path = '${dir.path}/$name';
     var file = File(path);
     if (await file.exists()) {
