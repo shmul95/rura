@@ -37,6 +37,67 @@ pub fn data_dir_exists() -> bool {
     data_dir().exists()
 }
 
+/// Ensure and return the images directory used for media downloads.
+pub fn ensure_images_dir() -> Result<PathBuf, String> {
+    let dir = data_dir().join("images");
+    ensure_dir(&dir)?;
+    Ok(dir)
+}
+
+fn sanitize_filename(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
+            out.push(ch);
+        } else {
+            out.push('_');
+        }
+    }
+    // Avoid empty or dot names
+    let s = out.trim_matches('.');
+    if s.is_empty() {
+        "file".to_string()
+    } else {
+        s.to_string()
+    }
+}
+
+/// Save raw bytes under the images directory. Returns an absolute path when possible.
+pub fn save_bytes_to_images_dir(
+    bytes: &[u8],
+    suggested_name: Option<&str>,
+) -> Result<PathBuf, String> {
+    let dir = ensure_images_dir()?;
+    let mut name = suggested_name.unwrap_or("file").to_string();
+    name = sanitize_filename(&name);
+    if name.is_empty() {
+        name = "file".to_string();
+    }
+    let mut path = dir.join(&name);
+    // Deduplicate if exists
+    if path.exists() {
+        let mut i = 1;
+        loop {
+            let candidate = dir.join(format!("{}_{}", name, i));
+            if !candidate.exists() {
+                path = candidate;
+                break;
+            }
+            i += 1;
+            if i > 1000 {
+                break;
+            }
+        }
+    }
+    fs::write(&path, bytes).map_err(|e| format!("write {}: {}", path.display(), e))?;
+    // Try to return absolute path
+    if let Ok(abs) = fs::canonicalize(&path) {
+        Ok(abs)
+    } else {
+        Ok(path)
+    }
+}
+
 fn init_persistent_schema(conn: &Connection) -> Result<(), String> {
     // Basic PRAGMAs suitable for local storage
     conn.execute_batch(

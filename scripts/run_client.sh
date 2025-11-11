@@ -35,6 +35,8 @@ popd >/dev/null
 echo "[run_client] Building Rust client (release) into crates/client/target"
 export CARGO_TARGET_DIR="$ROOT_DIR/crates/client/target"
 pushd "$ROOT_DIR/crates/client" >/dev/null
+# Ensure we are not loading a stale library compiled with old FRB glue
+cargo clean -p rura_client >/dev/null 2>&1 || true
 cargo build --release
 popd >/dev/null
 
@@ -53,8 +55,16 @@ fi
 
 echo "[run_client] Launching Flutter app on device: $DEVICE (E2EE enforced, RTC-only messaging)"
 pushd "$APP_DIR" >/dev/null
+# Clean Flutter caches so Dart-side generated code matches the freshly built Rust lib
+flutter clean >/dev/null 2>&1 || true
 flutter pub get
 # Enforce E2EE in the client UI via a compile-time define; the Rust layer also rejects plaintext bodies.
 export RURA_RTC_ONLY=true
+# Ensure the dynamic loader can locate the freshly built library
+if [[ "$OSTYPE" == darwin* ]]; then
+  export DYLD_LIBRARY_PATH="$CARGO_TARGET_DIR/release:${DYLD_LIBRARY_PATH:-}"
+else
+  export LD_LIBRARY_PATH="$CARGO_TARGET_DIR/release:${LD_LIBRARY_PATH:-}"
+fi
 flutter run -d "$DEVICE" --dart-define=REQUIRE_E2EE=true
 popd >/dev/null

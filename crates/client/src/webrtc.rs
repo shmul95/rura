@@ -125,6 +125,43 @@ fn handle_media_chunk(v: serde_json::Value, user_id: i64) -> Result<(), String> 
         if got != entry.checksum {
             return Err("checksum mismatch".into());
         }
+        // Persist to images dir and include file_path for UI rendering
+        let filename = match (&entry.name, entry.mime.as_str()) {
+            (Some(n), _) if !n.is_empty() => n.clone(),
+            (None, "image/jpeg") => format!(
+                "img_{}.jpg",
+                &entry.checksum.chars().take(8).collect::<String>()
+            ),
+            (None, "image/png") => format!(
+                "img_{}.png",
+                &entry.checksum.chars().take(8).collect::<String>()
+            ),
+            (None, "image/gif") => format!(
+                "img_{}.gif",
+                &entry.checksum.chars().take(8).collect::<String>()
+            ),
+            (None, "image/webp") => format!(
+                "img_{}.webp",
+                &entry.checksum.chars().take(8).collect::<String>()
+            ),
+            (None, "image/bmp") => format!(
+                "img_{}.bmp",
+                &entry.checksum.chars().take(8).collect::<String>()
+            ),
+            (None, "image/heic") | (None, "image/heif") => format!(
+                "img_{}.heic",
+                &entry.checksum.chars().take(8).collect::<String>()
+            ),
+            _ => format!(
+                "media_{}",
+                &entry.checksum.chars().take(8).collect::<String>()
+            ),
+        };
+        let file_path = match crate::local_storage::save_bytes_to_images_dir(&all, Some(&filename))
+        {
+            Ok(p) => p.to_string_lossy().to_string(),
+            Err(_) => String::new(),
+        };
         let data_b64 = base64::engine::general_purpose::STANDARD.encode(&all);
         let ev = serde_json::json!({
             "type": "media_complete",
@@ -135,6 +172,7 @@ fn handle_media_chunk(v: serde_json::Value, user_id: i64) -> Result<(), String> 
             "checksum": entry.checksum,
             "total_size": entry.total_size as u64,
             "msg_id": msg_id,
+            "file_path": if file_path.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(file_path) },
             "data_b64": data_b64,
         })
         .to_string();

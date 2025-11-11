@@ -475,6 +475,47 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
           // Already handled by HomePage; ignore here
           return;
         }
+        if (map['type'] == 'media_complete') {
+          // Save media message into conversation and show inline in UI using a body marker
+          final isIdentity = map.containsKey('from_identity');
+          final from = isIdentity
+              ? idToNumeric((map['from_identity'] ?? '').toString())
+              : (map['from_user_id'] as int);
+          final now = DateTime.now().toIso8601String();
+          final filePath = (map['file_path'] ?? '').toString();
+          String body;
+          if (filePath.isNotEmpty && File(filePath).existsSync()) {
+            body = 'IMG:' + filePath;
+          } else {
+            // Fallback: reconstruct from data_b64 when file_path missing
+            final b64 = (map['data_b64'] ?? '').toString();
+            if (b64.isNotEmpty) {
+              try {
+                final bytes = base64.decode(b64);
+                final name = (map['name'] ?? 'image').toString();
+                final saved = await _saveImageToData(bytes, suggestedName: name);
+                body = 'IMG:' + saved;
+              } catch (_) {
+                body = '[image received]';
+              }
+            } else {
+              body = '[image received]';
+            }
+          }
+          await appendLocalMessage(
+            fromUserId: from,
+            toUserId: _selfId,
+            body: body,
+            timestamp: now,
+          );
+          final msg = HistoryMessage(id: 0, fromUserId: from, toUserId: _selfId, body: body, timestamp: now);
+          _incoming.add(msg);
+          setState(() {
+            _groups.putIfAbsent(from, () => []);
+            _groups[from]!.add(msg);
+          });
+          return;
+        }
         // Support both numeric and identity-based events
         final bool isIdentity = map.containsKey('from_identity');
         final int from = isIdentity
@@ -1127,10 +1168,7 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
                     child: Column(
                       crossAxisAlignment: fromSelf ? CrossAxisAlignment.end : CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          m.body,
-                          style: TextStyle(color: fromSelf ? Colors.white : Colors.black),
-                        ),
+                        _renderMessageBody(m, fromSelf),
                         const SizedBox(height: 4),
                         Text(
                           _formatTime(m.timestamp),
@@ -1348,12 +1386,7 @@ class _ChatPageState extends State<ChatPage> {
                     child: Column(
                       crossAxisAlignment: fromSelf ? CrossAxisAlignment.end : CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          m.body,
-                          style: TextStyle(
-                            color: fromSelf ? Colors.white : Colors.black,
-                          ),
-                        ),
+                        _renderMessageBody(m, fromSelf),
                         const SizedBox(height: 4),
                         Text(
                           _formatTime(m.timestamp),
@@ -1498,4 +1531,57 @@ String _decodeEnvelope(String body) {
     }
   }
   return body;
+}
+
+Widget _renderMessageBody(HistoryMessage m, bool fromSelf) {
+  final body = m.body;
+  if (body.startsWith('IMG:')) {
+    final path = body.substring(4);
+    final f = File(path);
+    if (f.existsSync()) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: Image.file(
+          f,
+          width: 240,
+          fit: BoxFit.cover,
+          errorBuilder: (_, __, ___) => Text('[image] ${path.split('/').last}', style: TextStyle(color: fromSelf ? Colors.white : Colors.black)),
+        ),
+      );
+    }
+    return Text('[image missing] ${path.split('/').last}', style: TextStyle(color: fromSelf ? Colors.white : Colors.black));
+  }
+  return Text(body, style: TextStyle(color: fromSelf ? Colors.white : Colors.black));
+}
+
+Future<String> _saveImageToData(Uint8List bytes, {String? suggestedName}) async {
+  try {
+    // Mirror Rust path logic: ../data/images under app dir
+    var dir = Directory('../data/images');
+    if (!dir.existsSync()) {
+      await dir.create(recursive: true);
+    }
+    var name = suggestedName ?? 'image';
+    name = name.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
+    if (name.isEmpty) name = 'image';
+    var path = '${dir.path}/$name';
+    var file = File(path);
+    if (await file.exists()) {
+      int i = 1;
+      while (await File('${dir.path}/${name}_$i').exists()) {
+        i++;
+        if (i > 1000) break;
+      }
+      path = '${dir.path}/${name}_$i';
+      file = File(path);
+    }
+    await file.writeAsBytes(bytes);
+    try {
+      return file.resolveSymbolicLinksSync();
+    } catch (_) {
+      return file.path;
+    }
+  } catch (_) {
+    return '';
+  }
 }
