@@ -1159,21 +1159,11 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
     );
   }
 
-  // Prefer user's standard pictures/images dir if it exists.
+  // Start in user's home directory for file picker.
   Directory? _defaultImagesDir() {
     try {
       final home = Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'];
       if (home != null && home.isNotEmpty) {
-        final candidates = <String>[
-          '$home/Pictures', // Linux/macOS common
-          '$home/Pictures/',
-          '$home/Images',
-          '$home/images',
-        ];
-        for (final p in candidates) {
-          final d = Directory(p);
-          if (d.existsSync()) return d;
-        }
         return Directory(home);
       }
     } catch (_) {}
