@@ -1011,9 +1011,35 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
         bytes: bytes,
         chunkSize: BigInt.from(12 * 1024),
       );
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Sending $name...')),
-      );
+      // Locally reflect the sent image in our conversation immediately.
+      final savedPath = await _saveImageToData(bytes, suggestedName: name);
+      if (savedPath.isNotEmpty) {
+        final now = DateTime.now().toIso8601String();
+        final peer = idToNumeric(widget.recipientId);
+        final msg = HistoryMessage(
+          id: 0,
+          fromUserId: widget.selfUserId,
+          toUserId: peer,
+          body: 'IMG:' + savedPath,
+          timestamp: now,
+        );
+        await appendLocalMessage(
+          fromUserId: msg.fromUserId,
+          toUserId: msg.toUserId,
+          body: msg.body,
+          timestamp: msg.timestamp,
+        );
+        if (mounted) {
+          setState(() => _messages.add(msg));
+          if (_scroll.hasClients) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (_scroll.hasClients) {
+                _scroll.jumpTo(_scroll.position.maxScrollExtent + 120);
+              }
+            });
+          }
+        }
+      }
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Image send failed: $e')),
