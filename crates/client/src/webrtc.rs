@@ -161,8 +161,40 @@ fn handle_media_chunk(v: serde_json::Value, user_id: i64) -> Result<(), String> 
                 "img_{}.heic",
                 &entry.checksum.chars().take(8).collect::<String>()
             ),
+            (None, "video/mp4") => format!(
+                "vid_{}.mp4",
+                &entry.checksum.chars().take(8).collect::<String>()
+            ),
+            (None, "video/webm") => format!(
+                "vid_{}.webm",
+                &entry.checksum.chars().take(8).collect::<String>()
+            ),
+            (None, "video/quicktime") => format!(
+                "vid_{}.mov",
+                &entry.checksum.chars().take(8).collect::<String>()
+            ),
+            (None, "video/x-matroska") => format!(
+                "vid_{}.mkv",
+                &entry.checksum.chars().take(8).collect::<String>()
+            ),
+            (None, "audio/mpeg") => format!(
+                "aud_{}.mp3",
+                &entry.checksum.chars().take(8).collect::<String>()
+            ),
+            (None, "audio/wav") => format!(
+                "aud_{}.wav",
+                &entry.checksum.chars().take(8).collect::<String>()
+            ),
+            (None, "audio/ogg") => format!(
+                "aud_{}.ogg",
+                &entry.checksum.chars().take(8).collect::<String>()
+            ),
+            (None, "application/pdf") => format!(
+                "doc_{}.pdf",
+                &entry.checksum.chars().take(8).collect::<String>()
+            ),
             _ => format!(
-                "media_{}",
+                "file_{}.bin",
                 &entry.checksum.chars().take(8).collect::<String>()
             ),
         };

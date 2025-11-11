@@ -490,8 +490,9 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
           final now = DateTime.now().toIso8601String();
           final filePath = (map['file_path'] ?? '').toString();
           String body;
+          final mime = (map['mime'] ?? '').toString();
           if (filePath.isNotEmpty && File(filePath).existsSync()) {
-            body = 'IMG:' + filePath;
+            body = (mime.startsWith('image/') ? 'IMG:' : 'FILE:') + filePath;
           } else {
             // Fallback: reconstruct from data_b64 when file_path missing
             final b64 = (map['data_b64'] ?? '').toString();
@@ -500,12 +501,12 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
                 final bytes = base64.decode(b64);
                 final name = (map['name'] ?? 'image').toString();
                 final saved = await _saveImageToData(bytes, suggestedName: name);
-                body = 'IMG:' + saved;
+                body = (mime.startsWith('image/') ? 'IMG:' : 'FILE:') + saved;
               } catch (_) {
-                body = '[image received]';
+                body = mime.startsWith('image/') ? '[image received]' : '[file received]';
               }
             } else {
-              body = '[image received]';
+              body = mime.startsWith('image/') ? '[image received]' : '[file received]';
             }
           }
           await appendLocalMessage(
@@ -673,7 +674,7 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
               child: Icon(Icons.person),
             ),
             title: Text(_nicknames[peerId] ?? _identityByPeer[peerId] ?? peerId.toString()),
-            subtitle: Text(last?.body ?? '', maxLines: 1, overflow: TextOverflow.ellipsis),
+            subtitle: Text(_previewText(last?.body ?? '')), 
             trailing: Text(
               last != null ? _formatTime(last.timestamp) : '',
               style: Theme.of(context).textTheme.bodySmall,
@@ -1004,15 +1005,24 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
     if (lower.endsWith('.webp')) return 'image/webp';
     if (lower.endsWith('.bmp')) return 'image/bmp';
     if (lower.endsWith('.heic') || lower.endsWith('.heif')) return 'image/heic';
+    if (lower.endsWith('.mp4')) return 'video/mp4';
+    if (lower.endsWith('.mov')) return 'video/quicktime';
+    if (lower.endsWith('.webm')) return 'video/webm';
+    if (lower.endsWith('.mkv')) return 'video/x-matroska';
+    if (lower.endsWith('.mp3')) return 'audio/mpeg';
+    if (lower.endsWith('.wav')) return 'audio/wav';
+    if (lower.endsWith('.ogg')) return 'audio/ogg';
+    if (lower.endsWith('.pdf')) return 'application/pdf';
+    if (lower.endsWith('.txt')) return 'text/plain';
     return 'application/octet-stream';
   }
 
-  Future<void> _pickAndSendImage() async {
+  Future<void> _pickAndSendFile() async {
     // In-app fallback file chooser (no external plugin). Starts at user's home.
     if (_sending) return;
     setState(() => _sending = true);
     try {
-      final picked = await _browseForImage(context);
+      final picked = await _browseForFile(context);
       if (picked == null) return;
       final bytes = picked.$1;
       final name = picked.$2;
@@ -1026,16 +1036,17 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
         bytes: bytes,
         chunkSize: BigInt.from(12 * 1024),
       );
-      // Locally reflect the sent image in our conversation immediately.
+      // Locally reflect the sent file in our conversation immediately.
       final savedPath = await _saveImageToData(bytes, suggestedName: name);
       if (savedPath.isNotEmpty) {
         final now = DateTime.now().toIso8601String();
         final peer = idToNumeric(widget.recipientId);
+        final isImg = mime.startsWith('image/');
         final msg = HistoryMessage(
           id: 0,
           fromUserId: widget.selfUserId,
           toUserId: peer,
-          body: 'IMG:' + savedPath,
+          body: (isImg ? 'IMG:' : 'FILE:') + savedPath,
           timestamp: now,
         );
         await appendLocalMessage(
@@ -1064,7 +1075,7 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
     }
   }
 
-  Future<(Uint8List,String)?> _browseForImage(BuildContext context) async {
+  Future<(Uint8List,String)?> _browseForFile(BuildContext context) async {
     Directory start = _defaultImagesDir() ?? Directory.current;
 
     Directory current = start;
@@ -1090,7 +1101,7 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
                     ? 1
                     : a.path.compareTo(b.path));
           return AlertDialog(
-            title: Text('Choose image — ${_basename(current.path)}'),
+            title: Text('Choose file — ${_basename(current.path)}'),
             content: SizedBox(
               width: 600,
               height: 400,
@@ -1101,7 +1112,7 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
                   final name = _basename(e.path);
                   final isDir = e is Directory;
                   return ListTile(
-                    leading: Icon(isDir ? Icons.folder : Icons.image),
+                    leading: Icon(isDir ? Icons.folder : Icons.attach_file),
                     title: Text(name.isEmpty ? e.path : name),
                     onTap: () async {
                       if (isDir) {
@@ -1234,9 +1245,9 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
               child: Row(
                 children: [
                   IconButton(
-                    tooltip: 'Send image',
-                    onPressed: _sending ? null : _pickAndSendImage,
-                    icon: const Icon(Icons.image),
+                    tooltip: 'Attach',
+                    onPressed: _sending ? null : _pickAndSendFile,
+                    icon: const Icon(Icons.attach_file),
                   ),
                   Expanded(
                     child: TextField(
@@ -1658,6 +1669,20 @@ Widget _renderMessageBody(HistoryMessage m, bool fromSelf) {
     }
     return Text('[image missing] ${path.split('/').last}', style: TextStyle(color: fromSelf ? Colors.white : Colors.black));
   }
+  if (body.startsWith('FILE:')) {
+    final path = body.substring(5);
+    final name = path.split('/').isNotEmpty ? path.split('/').last : path;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(Icons.attach_file, size: 18, color: fromSelf ? Colors.white : Colors.black),
+        const SizedBox(width: 6),
+        Flexible(
+          child: Text(name, style: TextStyle(color: fromSelf ? Colors.white : Colors.black), overflow: TextOverflow.ellipsis),
+        ),
+      ],
+    );
+  }
   return Text(body, style: TextStyle(color: fromSelf ? Colors.white : Colors.black));
 }
 
@@ -1691,4 +1716,10 @@ Future<String> _saveImageToData(Uint8List bytes, {String? suggestedName}) async 
   } catch (_) {
     return '';
   }
+}
+
+String _previewText(String body) {
+  if (body.startsWith('IMG:')) return '[image]';
+  if (body.startsWith('FILE:')) return '[file] ' + (body.split('/').isNotEmpty ? body.split('/').last : '');
+  return body;
 }
