@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:video_player/video_player.dart';
 import 'dart:typed_data';
 import 'frb/api.dart';
 import 'package:flutter/services.dart' show rootBundle;
@@ -1654,6 +1655,32 @@ Widget _renderMessageBody(HistoryMessage m, bool fromSelf) {
   }
   if (body.startsWith('FILE:')) {
     final path = body.substring(5);
+    final lower = path.toLowerCase();
+    final isVideo = lower.endsWith('.mp4') || lower.endsWith('.mov') || lower.endsWith('.webm') || lower.endsWith('.mkv');
+    if (isVideo && File(path).existsSync()) {
+      return SizedBox(
+        width: 240,
+        height: 160,
+        child: _InlineVideoPlayer(filePath: path),
+      );
+    }
+    final name = path.split('/').isNotEmpty ? path.split('/').last : path;
+    return InkWell(
+      onTap: () => _openFilePath(path),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.attach_file, size: 18, color: fromSelf ? Colors.white : Colors.black),
+          const SizedBox(width: 6),
+          Flexible(
+            child: Text(name, style: TextStyle(color: fromSelf ? Colors.white : Colors.black), overflow: TextOverflow.ellipsis),
+          ),
+        ],
+      ),
+    );
+  }
+  if (body.startsWith('FILE:')) {
+    final path = body.substring(5);
     final name = path.split('/').isNotEmpty ? path.split('/').last : path;
     return Row(
       mainAxisSize: MainAxisSize.min,
@@ -1712,4 +1739,97 @@ String _previewText(String body) {
   if (body.startsWith('IMG:')) return '[image]';
   if (body.startsWith('FILE:')) return '[file] ' + (body.split('/').isNotEmpty ? body.split('/').last : '');
   return body;
+}
+
+Future<void> _openFilePath(String path) async {
+  try {
+    if (Platform.isLinux) {
+      await Process.run('xdg-open', [path]);
+    } else if (Platform.isMacOS) {
+      await Process.run('open', [path]);
+    } else if (Platform.isWindows) {
+      await Process.run('cmd', ['/c', 'start', '', path]);
+    }
+  } catch (_) {
+    // ignore
+  }
+}
+
+class _InlineVideoPlayer extends StatefulWidget {
+  final String filePath;
+  const _InlineVideoPlayer({required this.filePath});
+  @override
+  State<_InlineVideoPlayer> createState() => _InlineVideoPlayerState();
+}
+
+class _InlineVideoPlayerState extends State<_InlineVideoPlayer> {
+  late VideoPlayerController _controller;
+  bool _ready = false;
+  bool _error = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = VideoPlayerController.file(File(widget.filePath))
+      ..initialize().then((_) {
+        if (mounted) setState(() => _ready = true);
+      }).catchError((_) {
+        if (mounted) setState(() => _error = true);
+      });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _toggle() {
+    if (!_ready) return;
+    setState(() {
+      if (_controller.value.isPlaying) {
+        _controller.pause();
+      } else {
+        _controller.play();
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_error) return const Text('[video unsupported]');
+    if (!_ready) return const Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)));
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        FittedBox(
+          fit: BoxFit.cover,
+          child: SizedBox(
+            width: _controller.value.size.width,
+            height: _controller.value.size.height,
+            child: VideoPlayer(_controller),
+          ),
+        ),
+        Positioned.fill(
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: _toggle,
+              child: Center(
+                child: Container(
+                  decoration: BoxDecoration(color: Colors.black45, borderRadius: BorderRadius.circular(24)),
+                  padding: const EdgeInsets.all(8),
+                  child: Icon(
+                    _controller.value.isPlaying ? Icons.pause : Icons.play_arrow,
+                    color: Colors.white,
+                    size: 28,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 }
