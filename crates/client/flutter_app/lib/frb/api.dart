@@ -201,6 +201,13 @@ Future<void> setPubkeyOverStream({
   pubkey: pubkey,
 );
 
+/// Update (or set) a contact's nickname by identity (base64). Does not require a pubkey.
+Future<void> setContactNickname({required String userId, String? nickname}) =>
+    RustLib.instance.api.crateApiSetContactNickname(
+      userId: userId,
+      nickname: nickname,
+    );
+
 /// One-off helper: login and fetch another user's published public key.
 Future<String?> getPubkeyTls({
   required String host,

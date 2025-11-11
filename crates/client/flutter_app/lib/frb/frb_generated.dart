@@ -64,7 +64,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => 413154159;
+  int get rustContentHash => -1984851438;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -214,6 +214,11 @@ abstract class RustLibApi extends BaseApi {
     String? name,
     required List<int> bytes,
     BigInt? chunkSize,
+  });
+
+  Future<void> crateApiSetContactNickname({
+    required String userId,
+    String? nickname,
   });
 
   Future<void> crateApiSetPubkeyOverStream({
@@ -1080,6 +1085,40 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<void> crateApiSetContactNickname({
+    required String userId,
+    String? nickname,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(userId, serializer);
+          sse_encode_opt_String(nickname, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 23,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiSetContactNicknameConstMeta,
+        argValues: [userId, nickname],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSetContactNicknameConstMeta => const TaskConstMeta(
+    debugName: "set_contact_nickname",
+    argNames: ["userId", "nickname"],
+  );
+
+  @override
   Future<void> crateApiSetPubkeyOverStream({
     required PlatformInt64 userId,
     required String pubkey,
@@ -1093,7 +1132,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 23,
+            funcId: 24,
             port: port_,
           );
         },

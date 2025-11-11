@@ -36,6 +36,15 @@ static MEDIA_INBOUND: Lazy<std::sync::Mutex<std::collections::HashMap<String, Me
     Lazy::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 
 fn handle_media_chunk(v: serde_json::Value, user_id: i64) -> Result<(), String> {
+    // Reject chunks from unknown identities
+    if let Some(fid) = v.get("from_identity").and_then(|s| s.as_str())
+        && {
+            let _ = crate::local_storage::init_storage();
+            matches!(crate::local_storage::get_contact_pubkey(fid), Ok(None))
+        }
+    {
+        return Ok(());
+    }
     let msg_id = v
         .get("msg_id")
         .and_then(|s| s.as_str())
@@ -413,6 +422,16 @@ fn get_or_create_peer(user_id: i64, remote_id: i64) -> Result<Peer, String> {
                             }
                             return;
                         }
+                        // Drop messages from unknown contacts when identity is provided
+                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(text)
+                            && v.get("from_identity").and_then(|s| s.as_str()).is_some()
+                        {
+                            let fid = v.get("from_identity").and_then(|s| s.as_str()).unwrap();
+                            let _ = crate::local_storage::init_storage();
+                            if matches!(crate::local_storage::get_contact_pubkey(fid), Ok(None)) {
+                                return;
+                            }
+                        }
                         println!(
                             "[rtc] rx (user {}) {} bytes: {}",
                             this_user,
@@ -514,6 +533,17 @@ pub fn ensure_offer(user_id: i64, remote_id: i64) -> Result<(), String> {
                                     eprintln!("[rtc] media chunk error: {}", e);
                                 }
                                 return;
+                            }
+                            // Drop messages from unknown contacts when identity is provided
+                            if let Ok(v) = serde_json::from_str::<serde_json::Value>(text)
+                                && v.get("from_identity").and_then(|s| s.as_str()).is_some()
+                            {
+                                let fid = v.get("from_identity").and_then(|s| s.as_str()).unwrap();
+                                let _ = crate::local_storage::init_storage();
+                                if matches!(crate::local_storage::get_contact_pubkey(fid), Ok(None))
+                                {
+                                    return;
+                                }
                             }
                             println!(
                                 "[rtc] rx (user {} from {}) {} bytes: {}",

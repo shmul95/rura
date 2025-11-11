@@ -1021,6 +1021,13 @@ pub fn set_pubkey_over_stream(user_id: i64, pubkey: String) -> Result<(), String
         .map_err(|_| "Failed to enqueue set_pubkey".to_string())
 }
 
+/// Update (or set) a contact's nickname by identity (base64). Does not require a pubkey.
+#[frb]
+pub fn set_contact_nickname(user_id: String, nickname: Option<String>) -> Result<(), String> {
+    crate::local_storage::init_storage()?;
+    crate::local_storage::set_contact_nickname(user_id, nickname)
+}
+
 /// One-off helper: login and fetch another user's published public key.
 #[frb]
 pub fn get_pubkey_tls(

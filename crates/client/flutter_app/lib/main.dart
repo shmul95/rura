@@ -481,6 +481,12 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
           final from = isIdentity
               ? idToNumeric((map['from_identity'] ?? '').toString())
               : (map['from_user_id'] as int);
+          if (isIdentity) {
+            final rid = (map['from_identity'] ?? '').toString();
+            if (rid.isNotEmpty) {
+              setState(() => _identityByPeer[from] = rid);
+            }
+          }
           final now = DateTime.now().toIso8601String();
           final filePath = (map['file_path'] ?? '').toString();
           String body;
@@ -521,6 +527,12 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
         final int from = isIdentity
             ? idToNumeric((map['from_identity'] ?? '').toString())
             : (map['from_user_id'] as int);
+        if (isIdentity) {
+          final rid = (map['from_identity'] ?? '').toString();
+          if (rid.isNotEmpty) {
+            setState(() => _identityByPeer[from] = rid);
+          }
+        }
         final bodyRaw = map['body'] as String? ?? '';
         final body = _decodeEnvelope(bodyRaw);
         final now = DateTime.now().toIso8601String();
@@ -660,7 +672,7 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
               foregroundColor: Colors.black,
               child: Icon(Icons.person),
             ),
-            title: Text(_nicknames[peerId] ?? 'User $peerId'),
+            title: Text(_nicknames[peerId] ?? _identityByPeer[peerId] ?? peerId.toString()),
             subtitle: Text(last?.body ?? '', maxLines: 1, overflow: TextOverflow.ellipsis),
             trailing: Text(
               last != null ? _formatTime(last.timestamp) : '',
@@ -782,6 +794,9 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
   @override
   void initState() {
     super.initState();
+    _displayName = (widget.recipientName != null && widget.recipientName!.isNotEmpty)
+        ? widget.recipientName
+        : widget.recipientId;
     // Load existing conversation from local DB so the view is not empty
     _loadFromLocal();
     // Prefer processed inbound HistoryMessage stream for live refresh
@@ -1165,12 +1180,18 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
     return idx >= 0 ? p.substring(idx + 1) : p;
   }
 
+  String? _displayName;
+
   @override
   Widget build(BuildContext context) {
-    final ridShort = widget.recipientId.length > 10 ? widget.recipientId.substring(0, 10) + '…' : widget.recipientId;
-    final title = widget.recipientName?.isNotEmpty == true ? widget.recipientName! : 'Chat: $ridShort';
+    final title = _displayName ?? widget.recipientId;
     return Scaffold(
-      appBar: AppBar(title: Text(title)),
+      appBar: AppBar(
+        title: GestureDetector(
+          onTap: _promptRename,
+          child: Text(title),
+        ),
+      ),
       body: Column(
         children: [
           Expanded(
@@ -1248,6 +1269,66 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
         ],
       ),
     );
+  }
+
+  Future<void> _promptRename() async {
+    final ctrl = TextEditingController(text: _displayName ?? widget.recipientId);
+    final newName = await showDialog<String?>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Set nickname'),
+        content: TextField(
+          controller: ctrl,
+          decoration: const InputDecoration(hintText: 'Enter a nickname'),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(null), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()), child: const Text('Save')),
+        ],
+      ),
+    );
+    if (newName == null) return;
+    try {
+      await setContactNickname(userId: widget.recipientId, nickname: newName.isEmpty ? null : newName);
+      await _updateNicknameFile(idToNumeric(widget.recipientId), newName);
+      if (mounted) setState(() => _displayName = newName.isEmpty ? widget.recipientId : newName);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Nickname updated')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to update: $e')));
+      }
+    }
+  }
+
+  Future<void> _updateNicknameFile(int peerNumeric, String newName) async {
+    try {
+      // Mirror ChatListPage local JSON structure
+      final envDir = Platform.environment['RURA_CLIENT_DATA_DIR'];
+      final baseDir = envDir != null && envDir.trim().isNotEmpty ? Directory(envDir) : Directory('../data');
+      if (!baseDir.existsSync()) {
+        await baseDir.create(recursive: true);
+      }
+      final f = File('${baseDir.path}/nicknames.json');
+      Map<String, dynamic> data = {'nicknames': <String, String>{}, 'identities': <String, String>{}};
+      if (await f.exists()) {
+        try {
+          final raw = await f.readAsString();
+          final parsed = jsonDecode(raw);
+          if (parsed is Map) data = parsed.map((k, v) => MapEntry(k.toString(), v));
+        } catch (_) {}
+      }
+      final nicks = (data['nicknames'] as Map?)?.map((k, v) => MapEntry(k.toString(), v.toString())) ?? <String, String>{};
+      final ids = (data['identities'] as Map?)?.map((k, v) => MapEntry(k.toString(), v.toString())) ?? <String, String>{};
+      nicks[peerNumeric.toString()] = newName;
+      ids.putIfAbsent(peerNumeric.toString(), () => widget.recipientId);
+      data['nicknames'] = nicks;
+      data['identities'] = ids;
+      await f.writeAsString(jsonEncode(data));
+    } catch (_) {
+      // best effort
+    }
   }
 }
 

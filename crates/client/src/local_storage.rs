@@ -447,6 +447,29 @@ pub(crate) fn reset_store_for_tests() {
     *STORE.lock().unwrap() = None;
 }
 
+/// Update or set a contact nickname without changing the stored public key.
+pub fn set_contact_nickname(user_id: String, nickname: Option<String>) -> Result<(), String> {
+    with_store(|store| {
+        let conn = store.persistent.lock().unwrap();
+        let mut stmt = conn
+            .prepare("UPDATE contacts SET nickname = ?1 WHERE user_id = ?2")
+            .map_err(|e| format!("prepare update nickname failed: {e}"))?;
+        let changed = stmt
+            .execute(params![nickname, user_id])
+            .map_err(|e| format!("update nickname failed: {e}"))?;
+        if changed == 0 {
+            // Insert a new row with empty pubkey and nickname
+            conn.execute(
+                "INSERT INTO contacts (user_id, pubkey, nickname) VALUES (?1, ?2, ?3)",
+                params![user_id, "", nickname],
+            )
+            .map_err(|e| format!("insert nickname failed: {e}"))?;
+        }
+        Ok::<(), String>(())
+    })?;
+    flush_persistent()
+}
+
 /// Add or update a contact's public key by their user identity (base64 string).
 pub fn add_contact(
     user_id: String,
