@@ -1068,7 +1068,7 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
       }
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Image send failed: $e')),
+        SnackBar(content: Text('File send failed: $e')),
       );
     } finally {
       if (mounted) setState(() => _sending = false);
@@ -1087,13 +1087,6 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
           final entries = current
               .listSync()
               .whereType<FileSystemEntity>()
-              .where((e) {
-                final name = _basename(e.path);
-                // Show dirs and common image files
-                if (e is Directory) return true;
-                final lower = name.toLowerCase();
-                return lower.endsWith('.jpg') || lower.endsWith('.jpeg') || lower.endsWith('.png') || lower.endsWith('.gif') || lower.endsWith('.webp') || lower.endsWith('.bmp') || lower.endsWith('.heic') || lower.endsWith('.heif');
-              })
               .toList()
             ..sort((a, b) => a is Directory && b is! Directory
                 ? -1
