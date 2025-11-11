@@ -28,6 +28,9 @@ echo "[package_client] Building Rust client library (release)..."
 cd "$REPO_ROOT"
 cargo build --release -p rura_client --quiet
 
+echo "[package_client] Running FRB codegen to update bindings..."
+"$REPO_ROOT/scripts/frb_codegen.sh" "$REPO_ROOT/crates/client/flutter_app" "$REPO_ROOT" || true
+
 echo "[package_client] Copying Flutter app..."
 cp -r "$REPO_ROOT/crates/client/flutter_app" "$OUTPUT_DIR/"
 
