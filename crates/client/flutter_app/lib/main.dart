@@ -1088,6 +1088,11 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
           final entries = current
               .listSync()
               .whereType<FileSystemEntity>()
+              .where((e) {
+                final name = _basename(e.path);
+                // Hide dot entries in the file picker (files and directories)
+                return name.isNotEmpty && !name.startsWith('.');
+               })
               .toList()
             ..sort((a, b) => a is Directory && b is! Directory
                 ? -1
