@@ -14,6 +14,7 @@ Quick links
  - E2EE Guide: [docs/E2EE.md](docs/E2EE.md)
 
 Client quick start
+- Install the FRB Rust codegen CLI once: `cargo install flutter_rust_bridge_codegen`
 - Run the desktop Flutter client with FRB bridging: `./scripts/run_client.sh`
   - The client defaults to reading a CA certificate from `certs/ca.crt` (repo root).
   - You can change Host/Port/Cert path, passphrase, and password in the UI.

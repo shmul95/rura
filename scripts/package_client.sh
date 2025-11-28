@@ -4,6 +4,8 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+CARGO_BIN_DIR="${CARGO_HOME:-$HOME/.cargo}/bin"
+export PATH="$CARGO_BIN_DIR:$PATH"
 
 if [ -z "$1" ]; then
     echo "Usage: $0 <output_directory_name>"
@@ -24,9 +26,37 @@ fi
 # Create package structure
 mkdir -p "$OUTPUT_DIR"
 
+if ! command -v flutter_rust_bridge_codegen >/dev/null 2>&1; then
+    echo "[package_client] ERROR: flutter_rust_bridge_codegen not found."
+    echo "Install it via: cargo install flutter_rust_bridge_codegen" >&2
+    exit 1
+fi
+
 echo "[package_client] Building Rust client library (release)..."
 cd "$REPO_ROOT"
 cargo build --release -p rura_client --quiet
+
+TARGET_LIB_DIR="$REPO_ROOT/target/release"
+case "$(uname)" in
+    Darwin) LIB_ARTIFACT="librura_client.dylib" ;;
+    Linux) LIB_ARTIFACT="librura_client.so" ;;
+    MINGW64_NT*|MSYS_NT*|CYGWIN_NT*|Windows_NT|Windows)
+        LIB_ARTIFACT="rura_client.dll"
+        ;;
+    *)
+        LIB_ARTIFACT=""
+        ;;
+esac
+
+if [ -z "$LIB_ARTIFACT" ]; then
+    echo "[package_client] ERROR: Unsupported OS for packaging (uname=$(uname))." >&2
+    exit 1
+fi
+
+if [ ! -f "$TARGET_LIB_DIR/$LIB_ARTIFACT" ]; then
+    echo "[package_client] ERROR: Expected artifact $TARGET_LIB_DIR/$LIB_ARTIFACT not found. Did the build succeed?" >&2
+    exit 1
+fi
 
 echo "[package_client] Running FRB codegen to update bindings..."
 "$REPO_ROOT/scripts/frb_codegen.sh" "$REPO_ROOT/crates/client/flutter_app" "$REPO_ROOT" || true
@@ -40,81 +70,23 @@ rm -rf "$OUTPUT_DIR/flutter_app/.dart_tool"
 
 echo "[package_client] Copying Rust library..."
 mkdir -p "$OUTPUT_DIR/lib"
-LIB_SRC=""
-for CAND in \
-  "$REPO_ROOT/target/release/librura_client.so" \
-  "$REPO_ROOT/target/release/librura_client.dylib" \
-  "$REPO_ROOT/target/release/rura_client.dll" \
-  "$REPO_ROOT/crates/client/target/release/librura_client.so" \
-  "$REPO_ROOT/crates/client/target/release/librura_client.dylib" \
-  "$REPO_ROOT/crates/client/target/release/rura_client.dll"; do
-  if [ -f "$CAND" ]; then LIB_SRC="$CAND"; break; fi
-done
-if [ -z "$LIB_SRC" ]; then
-  echo "[package_client] ERROR: Could not find compiled library (looked in target/release and crates/client/target/release)" >&2
-  exit 1
-fi
-cp "$LIB_SRC" "$OUTPUT_DIR/lib/"
+cp "$TARGET_LIB_DIR/$LIB_ARTIFACT" "$OUTPUT_DIR/lib/$LIB_ARTIFACT"
 
 echo "[package_client] Copying certificates (optional)..."
 if [ -d "$REPO_ROOT/certs" ]; then
     cp -r "$REPO_ROOT/certs" "$OUTPUT_DIR/"
 fi
 
+echo "[package_client] Copying run helper script..."
+cp "$REPO_ROOT/scripts/run_flutter_desktop.sh" "$OUTPUT_DIR/run_flutter_desktop.sh"
+chmod +x "$OUTPUT_DIR/run_flutter_desktop.sh"
+
 echo "[package_client] Creating run script..."
 cat > "$OUTPUT_DIR/run_client.sh" << 'RUNSCRIPT'
 #!/usr/bin/env bash
-# Run the packaged Rura client
-set -e
-
-PACKAGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-APP_DIR="$PACKAGE_DIR/flutter_app"
-LIB_DIR="$PACKAGE_DIR/lib"
-
-# Detect platform and set library path
-if [ "$(uname)" = "Darwin" ]; then
-    export DYLD_LIBRARY_PATH="$LIB_DIR:${DYLD_LIBRARY_PATH:-}"
-    LIB_EXT="dylib"
-elif [ "$(uname)" = "Linux" ]; then
-    export LD_LIBRARY_PATH="$LIB_DIR:${LD_LIBRARY_PATH:-}"
-    LIB_EXT="so"
-else
-    # Windows (assuming Git Bash or similar)
-    export PATH="$LIB_DIR:$PATH"
-    LIB_EXT="dll"
-fi
-
-# Check if library exists
-if [ ! -f "$LIB_DIR/librura_client.$LIB_EXT" ] && [ ! -f "$LIB_DIR/rura_client.dll" ]; then
-    echo "ERROR: Rust library not found in $LIB_DIR"
-    exit 1
-fi
-
-# Check if Flutter is installed
-if ! command -v flutter &> /dev/null; then
-    echo "ERROR: Flutter is not installed or not in PATH"
-    echo "Please install Flutter from: https://flutter.dev/docs/get-started/install"
-    exit 1
-fi
-
-echo "Starting Rura client..."
-echo "Library path: $LIB_DIR"
-echo "App directory: $APP_DIR"
-
-cd "$APP_DIR"
-
-# Detect available device (suppress broken pipe errors)
-DEVICES=$(flutter devices 2>/dev/null || true)
-if echo "$DEVICES" | grep -qi "Linux"; then
-    flutter run -d linux "$@"
-elif echo "$DEVICES" | grep -qi "macOS"; then
-    flutter run -d macos "$@"
-elif echo "$DEVICES" | grep -qi "Windows"; then
-    flutter run -d windows "$@"
-else
-    echo "WARNING: No desktop device detected, trying default..."
-    flutter run "$@"
-fi
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+exec "$SCRIPT_DIR/run_flutter_desktop.sh" "$SCRIPT_DIR/flutter_app" "$@"
 RUNSCRIPT
 
 chmod +x "$OUTPUT_DIR/run_client.sh"
@@ -139,7 +111,7 @@ This is a standalone package of the Rura messaging client.
 
 2. Run the client:
    ```bash
-   ./run_client.sh
+   ./run_client.sh   # or ./run_flutter_desktop.sh for direct access
    ```
 
 ## Configuration
@@ -160,7 +132,8 @@ This is a standalone package of the Rura messaging client.
 ├── lib/                # Rust shared library
 │   └── librura_client.so (or .dylib/.dll)
 ├── certs/              # TLS certificates (optional)
-├── run_client.sh       # Launch script
+├── run_client.sh       # Wrapper around the helper script
+├── run_flutter_desktop.sh # Cross-platform helper (forces software rendering on Linux)
 └── README.md           # This file
 ```
 
@@ -177,6 +150,9 @@ Install Flutter and ensure it's in your PATH:
 ```bash
 export PATH="$PATH:/path/to/flutter/bin"
 ```
+
+### Linux GL errors
+If you see `FL_IS_ENGINE(self)` or `Failed to initialize GLArea`, run via `./run_flutter_desktop.sh` (or keep using `run_client.sh`, which already delegates to it). The helper exports Mesa software-rendering variables and passes `--enable-software-rendering` to Flutter.
 
 ### No desktop support
 Enable desktop support for your platform:

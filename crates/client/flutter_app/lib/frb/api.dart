@@ -9,17 +9,16 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 // These functions are ignored because they are not marked as `pub`: `auth_over_stream`, `build_root_store_from_pem`, `fetch_history_over_stream`, `make_tls_stream`, `read_line`, `session_id_from_identity`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`, `from`
 
-Future<void> appendLocalMessage({
-  required PlatformInt64 fromUserId,
-  required PlatformInt64 toUserId,
-  required String body,
-  required String timestamp,
-}) => RustLib.instance.api.crateApiAppendLocalMessage(
-  fromUserId: fromUserId,
-  toUserId: toUserId,
-  body: body,
-  timestamp: timestamp,
-);
+Future<void> appendLocalMessage(
+        {required PlatformInt64 fromUserId,
+        required PlatformInt64 toUserId,
+        required String body,
+        required String timestamp}) =>
+    RustLib.instance.api.crateApiAppendLocalMessage(
+        fromUserId: fromUserId,
+        toUserId: toUserId,
+        body: body,
+        timestamp: timestamp);
 
 Future<List<HistoryMessage>> loadLocalHistory({BigInt? limit}) =>
     RustLib.instance.api.crateApiLoadLocalHistory(limit: limit);
@@ -36,28 +35,20 @@ Future<void> addContact({required String userId, required String pubkey}) =>
     RustLib.instance.api.crateApiAddContact(userId: userId, pubkey: pubkey);
 
 /// Add or update a contact with optional nickname.
-Future<void> addContactWithNickname({
-  required String userId,
-  required String pubkey,
-  String? nickname,
-}) => RustLib.instance.api.crateApiAddContactWithNickname(
-  userId: userId,
-  pubkey: pubkey,
-  nickname: nickname,
-);
+Future<void> addContactWithNickname(
+        {required String userId, required String pubkey, String? nickname}) =>
+    RustLib.instance.api.crateApiAddContactWithNickname(
+        userId: userId, pubkey: pubkey, nickname: nickname);
 
 /// List contacts as a JSON array [{user_id, pubkey, nickname}].
 Future<String> listContactsJson() =>
     RustLib.instance.api.crateApiListContactsJson();
 
 /// Encrypt plaintext for a contact identity using their published public key.
-Future<String> encryptMessageForIdentity({
-  required String toIdentity,
-  required String plaintext,
-}) => RustLib.instance.api.crateApiEncryptMessageForIdentity(
-  toIdentity: toIdentity,
-  plaintext: plaintext,
-);
+Future<String> encryptMessageForIdentity(
+        {required String toIdentity, required String plaintext}) =>
+    RustLib.instance.api.crateApiEncryptMessageForIdentity(
+        toIdentity: toIdentity, plaintext: plaintext);
 
 /// Decrypt a v1 envelope into plaintext using our private key.
 Future<String> decryptMessageFromEnvelope({required String envelope}) =>
@@ -69,94 +60,86 @@ Future<String> decryptMessageFromEnvelope({required String envelope}) =>
 /// - `port`: e.g., `8443`
 /// - `ca_pem`: contents of the server's certificate (PEM) used as a root
 /// - `passphrase`, `password`: user credentials
-Future<LoginResponse> loginTls({
-  required String host,
-  required int port,
-  required String caPem,
-  required String passphrase,
-  required String password,
-}) => RustLib.instance.api.crateApiLoginTls(
-  host: host,
-  port: port,
-  caPem: caPem,
-  passphrase: passphrase,
-  password: password,
-);
+Future<LoginResponse> loginTls(
+        {required String host,
+        required int port,
+        required String caPem,
+        required String passphrase,
+        required String password}) =>
+    RustLib.instance.api.crateApiLoginTls(
+        host: host,
+        port: port,
+        caPem: caPem,
+        passphrase: passphrase,
+        password: password);
 
 /// Register a new user against the TLS-only server and return the auth response.
-Future<LoginResponse> registerTls({
-  required String host,
-  required int port,
-  required String caPem,
-  required String passphrase,
-  required String password,
-}) => RustLib.instance.api.crateApiRegisterTls(
-  host: host,
-  port: port,
-  caPem: caPem,
-  passphrase: passphrase,
-  password: password,
-);
+Future<LoginResponse> registerTls(
+        {required String host,
+        required int port,
+        required String caPem,
+        required String passphrase,
+        required String password}) =>
+    RustLib.instance.api.crateApiRegisterTls(
+        host: host,
+        port: port,
+        caPem: caPem,
+        passphrase: passphrase,
+        password: password);
 
 /// Login and send a direct message in a single TLS session.
-Future<SendResult> sendDirectMessageTls({
-  required String host,
-  required int port,
-  required String caPem,
-  required String passphrase,
-  required String password,
-  required PlatformInt64 toUserId,
-  required String body,
-}) => RustLib.instance.api.crateApiSendDirectMessageTls(
-  host: host,
-  port: port,
-  caPem: caPem,
-  passphrase: passphrase,
-  password: password,
-  toUserId: toUserId,
-  body: body,
-);
+Future<SendResult> sendDirectMessageTls(
+        {required String host,
+        required int port,
+        required String caPem,
+        required String passphrase,
+        required String password,
+        required PlatformInt64 toUserId,
+        required String body}) =>
+    RustLib.instance.api.crateApiSendDirectMessageTls(
+        host: host,
+        port: port,
+        caPem: caPem,
+        passphrase: passphrase,
+        password: password,
+        toUserId: toUserId,
+        body: body);
 
-Stream<String> openMessageStreamTls({
-  required String host,
-  required int port,
-  required String caPem,
-  required String passphrase,
-  required String password,
-}) => RustLib.instance.api.crateApiOpenMessageStreamTls(
-  host: host,
-  port: port,
-  caPem: caPem,
-  passphrase: passphrase,
-  password: password,
-);
+Stream<String> openMessageStreamTls(
+        {required String host,
+        required int port,
+        required String caPem,
+        required String passphrase,
+        required String password}) =>
+    RustLib.instance.api.crateApiOpenMessageStreamTls(
+        host: host,
+        port: port,
+        caPem: caPem,
+        passphrase: passphrase,
+        password: password);
 
 /// Keep a TLS session open and stream incoming direct messages (register flow).
 /// Same behavior as `open_message_stream_tls` but authenticates via `register`.
-Stream<String> openMessageStreamRegisterTls({
-  required String host,
-  required int port,
-  required String caPem,
-  required String passphrase,
-  required String password,
-}) => RustLib.instance.api.crateApiOpenMessageStreamRegisterTls(
-  host: host,
-  port: port,
-  caPem: caPem,
-  passphrase: passphrase,
-  password: password,
-);
+Stream<String> openMessageStreamRegisterTls(
+        {required String host,
+        required int port,
+        required String caPem,
+        required String passphrase,
+        required String password}) =>
+    RustLib.instance.api.crateApiOpenMessageStreamRegisterTls(
+        host: host,
+        port: port,
+        caPem: caPem,
+        passphrase: passphrase,
+        password: password);
 
 /// Send a direct message using an existing open stream session for the given user_id.
-Future<void> sendDirectMessageOverStream({
-  required PlatformInt64 userId,
-  required PlatformInt64 toUserId,
-  required String body,
-}) => RustLib.instance.api.crateApiSendDirectMessageOverStream(
-  userId: userId,
-  toUserId: toUserId,
-  body: body,
-);
+Future<void> sendDirectMessageOverStream(
+        {required PlatformInt64 userId,
+        required PlatformInt64 toUserId,
+        required String body}) =>
+    RustLib.instance.api.crateApiSendDirectMessageOverStream(
+        userId: userId, toUserId: toUserId, body: body);
 
 /// Send media bytes to a peer over the WebRTC data channel using chunked messages.
 ///
@@ -165,133 +148,119 @@ Future<void> sendDirectMessageOverStream({
 /// using `msg_id`, verify the `checksum`, and reconstruct the original file.
 ///
 /// This keeps server completely out of the data path; all transfer is P2P via WebRTC.
-Future<void> sendMediaToIdentity({
-  required PlatformInt64 userId,
-  required String toIdentity,
-  required String mime,
-  String? name,
-  required List<int> bytes,
-  BigInt? chunkSize,
-}) => RustLib.instance.api.crateApiSendMediaToIdentity(
-  userId: userId,
-  toIdentity: toIdentity,
-  mime: mime,
-  name: name,
-  bytes: bytes,
-  chunkSize: chunkSize,
-);
+Future<void> sendMediaToIdentity(
+        {required PlatformInt64 userId,
+        required String toIdentity,
+        required String mime,
+        String? name,
+        required List<int> bytes,
+        BigInt? chunkSize}) =>
+    RustLib.instance.api.crateApiSendMediaToIdentity(
+        userId: userId,
+        toIdentity: toIdentity,
+        mime: mime,
+        name: name,
+        bytes: bytes,
+        chunkSize: chunkSize);
 
 /// Send a direct message targeting a peer by identity (base64 string) using an existing stream.
-Future<void> sendDirectMessageOverStreamToIdentity({
-  required PlatformInt64 userId,
-  required String toIdentity,
-  required String body,
-}) => RustLib.instance.api.crateApiSendDirectMessageOverStreamToIdentity(
-  userId: userId,
-  toIdentity: toIdentity,
-  body: body,
-);
+Future<void> sendDirectMessageOverStreamToIdentity(
+        {required PlatformInt64 userId,
+        required String toIdentity,
+        required String body}) =>
+    RustLib.instance.api.crateApiSendDirectMessageOverStreamToIdentity(
+        userId: userId, toIdentity: toIdentity, body: body);
 
 /// Publish a public key for the authenticated user via an existing stream session.
-Future<void> setPubkeyOverStream({
-  required PlatformInt64 userId,
-  required String pubkey,
-}) => RustLib.instance.api.crateApiSetPubkeyOverStream(
-  userId: userId,
-  pubkey: pubkey,
-);
+Future<void> setPubkeyOverStream(
+        {required PlatformInt64 userId, required String pubkey}) =>
+    RustLib.instance.api
+        .crateApiSetPubkeyOverStream(userId: userId, pubkey: pubkey);
 
 /// Update (or set) a contact's nickname by identity (base64). Does not require a pubkey.
 Future<void> setContactNickname({required String userId, String? nickname}) =>
-    RustLib.instance.api.crateApiSetContactNickname(
-      userId: userId,
-      nickname: nickname,
-    );
+    RustLib.instance.api
+        .crateApiSetContactNickname(userId: userId, nickname: nickname);
 
 /// One-off helper: login and fetch another user's published public key.
-Future<String?> getPubkeyTls({
-  required String host,
-  required int port,
-  required String caPem,
-  required String passphrase,
-  required String password,
-  required PlatformInt64 userId,
-}) => RustLib.instance.api.crateApiGetPubkeyTls(
-  host: host,
-  port: port,
-  caPem: caPem,
-  passphrase: passphrase,
-  password: password,
-  userId: userId,
-);
+Future<String?> getPubkeyTls(
+        {required String host,
+        required int port,
+        required String caPem,
+        required String passphrase,
+        required String password,
+        required PlatformInt64 userId}) =>
+    RustLib.instance.api.crateApiGetPubkeyTls(
+        host: host,
+        port: port,
+        caPem: caPem,
+        passphrase: passphrase,
+        password: password,
+        userId: userId);
 
 /// Login and fetch message history in one TLS session.
-Future<HistoryBundle> loginAndFetchHistoryTls({
-  required String host,
-  required int port,
-  required String caPem,
-  required String passphrase,
-  required String password,
-  BigInt? limit,
-}) => RustLib.instance.api.crateApiLoginAndFetchHistoryTls(
-  host: host,
-  port: port,
-  caPem: caPem,
-  passphrase: passphrase,
-  password: password,
-  limit: limit,
-);
+Future<HistoryBundle> loginAndFetchHistoryTls(
+        {required String host,
+        required int port,
+        required String caPem,
+        required String passphrase,
+        required String password,
+        BigInt? limit}) =>
+    RustLib.instance.api.crateApiLoginAndFetchHistoryTls(
+        host: host,
+        port: port,
+        caPem: caPem,
+        passphrase: passphrase,
+        password: password,
+        limit: limit);
 
 /// Login and load local cache history (no server history).
-Future<HistoryBundle> loginAndLoadLocalHistoryTls({
-  required String host,
-  required int port,
-  required String caPem,
-  required String passphrase,
-  required String password,
-  BigInt? limit,
-}) => RustLib.instance.api.crateApiLoginAndLoadLocalHistoryTls(
-  host: host,
-  port: port,
-  caPem: caPem,
-  passphrase: passphrase,
-  password: password,
-  limit: limit,
-);
+Future<HistoryBundle> loginAndLoadLocalHistoryTls(
+        {required String host,
+        required int port,
+        required String caPem,
+        required String passphrase,
+        required String password,
+        BigInt? limit}) =>
+    RustLib.instance.api.crateApiLoginAndLoadLocalHistoryTls(
+        host: host,
+        port: port,
+        caPem: caPem,
+        passphrase: passphrase,
+        password: password,
+        limit: limit);
 
 /// Register and load local cache history (no server history).
-Future<HistoryBundle> registerAndLoadLocalHistoryTls({
-  required String host,
-  required int port,
-  required String caPem,
-  required String passphrase,
-  required String password,
-  BigInt? limit,
-}) => RustLib.instance.api.crateApiRegisterAndLoadLocalHistoryTls(
-  host: host,
-  port: port,
-  caPem: caPem,
-  passphrase: passphrase,
-  password: password,
-  limit: limit,
-);
+Future<HistoryBundle> registerAndLoadLocalHistoryTls(
+        {required String host,
+        required int port,
+        required String caPem,
+        required String passphrase,
+        required String password,
+        BigInt? limit}) =>
+    RustLib.instance.api.crateApiRegisterAndLoadLocalHistoryTls(
+        host: host,
+        port: port,
+        caPem: caPem,
+        passphrase: passphrase,
+        password: password,
+        limit: limit);
 
 /// Register and fetch message history in one TLS session.
-Future<HistoryBundle> registerAndFetchHistoryTls({
-  required String host,
-  required int port,
-  required String caPem,
-  required String passphrase,
-  required String password,
-  BigInt? limit,
-}) => RustLib.instance.api.crateApiRegisterAndFetchHistoryTls(
-  host: host,
-  port: port,
-  caPem: caPem,
-  passphrase: passphrase,
-  password: password,
-  limit: limit,
-);
+Future<HistoryBundle> registerAndFetchHistoryTls(
+        {required String host,
+        required int port,
+        required String caPem,
+        required String passphrase,
+        required String password,
+        BigInt? limit}) =>
+    RustLib.instance.api.crateApiRegisterAndFetchHistoryTls(
+        host: host,
+        port: port,
+        caPem: caPem,
+        passphrase: passphrase,
+        password: password,
+        limit: limit);
 
 /// Bundle returned by login/register + history.
 class HistoryBundle {
@@ -388,7 +357,10 @@ class SendResult {
   final bool success;
   final String message;
 
-  const SendResult({required this.success, required this.message});
+  const SendResult({
+    required this.success,
+    required this.message,
+  });
 
   @override
   int get hashCode => success.hashCode ^ message.hashCode;

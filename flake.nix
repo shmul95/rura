@@ -11,9 +11,7 @@
     let
       system = "x86_64-linux";
       overlays = [ rust-overlay.overlays.default ];
-      pkgs = import nixpkgs {
-        inherit system overlays;
-      };
+      pkgs = import nixpkgs { inherit system overlays; };
 
       rustNightly = pkgs.rust-bin.nightly.latest.default.override {
         extensions = [ "rustfmt" "clippy" ];
@@ -78,6 +76,10 @@
           export CARGO_TARGET_DIR=''${CARGO_TARGET_DIR:-$PWD/target}
           export LIBGL_DRIVERS_PATH=${pkgs.mesa.drivers}/lib/dri:''${LIBGL_DRIVERS_PATH:-}
           export MESA_LOADER_DRIVER_OVERRIDE=''${MESA_LOADER_DRIVER_OVERRIDE:-swrast}
+          if ! command -v flutter_rust_bridge_codegen >/dev/null 2>&1; then
+            echo "[devshell] Installing flutter_rust_bridge_codegen via cargo..."
+            cargo install flutter_rust_bridge_codegen
+          fi
         '';
       };
     };
