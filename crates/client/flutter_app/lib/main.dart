@@ -536,7 +536,7 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
           }
         }
         final bodyRaw = map['body'] as String? ?? '';
-        final body = _decodeEnvelope(bodyRaw);
+        final body = await _decryptEnvelope(bodyRaw);
         final now = DateTime.now().toIso8601String();
         // Persist to local cache
         await appendLocalMessage(
@@ -824,7 +824,7 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
           final fromId = (map['from_identity'] ?? '').toString();
           final bodyRaw = map['body'] as String? ?? '';
           if (fromId == widget.recipientId) {
-            final body = _decodeEnvelope(bodyRaw);
+            final body = await _decryptEnvelope(bodyRaw);
             final now = DateTime.now().toIso8601String();
             final peer = idToNumeric(widget.recipientId);
             await appendLocalMessage(
@@ -934,7 +934,7 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
               final fromId = (map['from_identity'] ?? '').toString();
               final bodyRaw = map['body'] as String? ?? '';
               if (fromId == widget.recipientId) {
-                final body = _decodeEnvelope(bodyRaw);
+                final body = await _decryptEnvelope(bodyRaw);
                 final now = DateTime.now().toIso8601String();
                 final peer = idToNumeric(widget.recipientId);
                 await appendLocalMessage(
@@ -1626,14 +1626,18 @@ String _formatTime(String iso) {
   return '${dt.year}-${_two(dt.month)}-${_two(dt.day)}';
 }
 
-String _decodeEnvelope(String body) {
+Future<String> _decryptEnvelope(String body) async {
   if (body.startsWith('v1:')) {
-    final parts = body.split(':');
-    if (parts.length == 4) {
-      try {
-        return utf8.decode(base64.decode(parts[3]));
-      } catch (_) {
-        return body;
+    try {
+      return await decryptMessageFromEnvelope(envelope: body);
+    } catch (_) {
+      final parts = body.split(':');
+      if (parts.length == 4) {
+        try {
+          return utf8.decode(base64.decode(parts[3]));
+        } catch (_) {
+          return body;
+        }
       }
     }
   }

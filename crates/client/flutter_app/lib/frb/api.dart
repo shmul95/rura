@@ -6,8 +6,8 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `auth_over_stream`, `build_root_store_from_pem`, `fetch_history_over_stream`, `make_tls_stream`, `read_line`, `session_id_from_identity`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`, `from`
+// These functions are ignored because they are not marked as `pub`: `auth_over_stream`, `build_root_store_from_pem`, `call_id_for_remote`, `clear_call_state_if_match`, `enqueue_command`, `fetch_history_over_stream`, `forward_call_event`, `generate_call_id`, `handle_incoming_call_command`, `load_active_call_state`, `make_tls_stream`, `persist_active_call_state`, `read_line`, `record_call_answer`, `record_call_end`, `record_call_invite`, `record_call_ringing`, `send_command_over_stream`, `session_id_from_identity`, `update_call_state_if_match`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`
 
 Future<void> appendLocalMessage(
         {required PlatformInt64 fromUserId,
@@ -53,6 +53,33 @@ Future<String> encryptMessageForIdentity(
 /// Decrypt a v1 envelope into plaintext using our private key.
 Future<String> decryptMessageFromEnvelope({required String envelope}) =>
     RustLib.instance.api.crateApiDecryptMessageFromEnvelope(envelope: envelope);
+
+Future<CallState?> getCurrentCallState() =>
+    RustLib.instance.api.crateApiGetCurrentCallState();
+
+Future<CallState> startCall(
+        {required PlatformInt64 userId,
+        required PlatformInt64 remoteUserId,
+        required bool enableVideo}) =>
+    RustLib.instance.api.crateApiStartCall(
+        userId: userId, remoteUserId: remoteUserId, enableVideo: enableVideo);
+
+Future<CallState> acceptCall(
+        {required PlatformInt64 userId,
+        required String callId,
+        required bool enableVideo}) =>
+    RustLib.instance.api.crateApiAcceptCall(
+        userId: userId, callId: callId, enableVideo: enableVideo);
+
+Future<void> rejectCall(
+        {required PlatformInt64 userId,
+        required String callId,
+        required bool busy}) =>
+    RustLib.instance.api
+        .crateApiRejectCall(userId: userId, callId: callId, busy: busy);
+
+Future<void> endCall({required PlatformInt64 userId, required String callId}) =>
+    RustLib.instance.api.crateApiEndCall(userId: userId, callId: callId);
 
 /// Login to the TLS-only server and return the auth response.
 ///
@@ -261,6 +288,57 @@ Future<HistoryBundle> registerAndFetchHistoryTls(
         passphrase: passphrase,
         password: password,
         limit: limit);
+
+enum CallDirection {
+  incoming,
+  outgoing,
+  ;
+}
+
+class CallState {
+  final String callId;
+  final PlatformInt64 remoteUserId;
+  final CallDirection direction;
+  final CallStatus status;
+  final bool audioEnabled;
+  final bool videoEnabled;
+
+  const CallState({
+    required this.callId,
+    required this.remoteUserId,
+    required this.direction,
+    required this.status,
+    required this.audioEnabled,
+    required this.videoEnabled,
+  });
+
+  @override
+  int get hashCode =>
+      callId.hashCode ^
+      remoteUserId.hashCode ^
+      direction.hashCode ^
+      status.hashCode ^
+      audioEnabled.hashCode ^
+      videoEnabled.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is CallState &&
+          runtimeType == other.runtimeType &&
+          callId == other.callId &&
+          remoteUserId == other.remoteUserId &&
+          direction == other.direction &&
+          status == other.status &&
+          audioEnabled == other.audioEnabled &&
+          videoEnabled == other.videoEnabled;
+}
+
+enum CallStatus {
+  ringing,
+  connected,
+  ;
+}
 
 /// Bundle returned by login/register + history.
 class HistoryBundle {

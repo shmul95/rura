@@ -83,6 +83,10 @@ pub(super) async fn handle_client_message(
                 "message" => {
                     #[derive(serde::Deserialize)]
                     struct LocalDM {
+                        #[serde(default)]
+                        to_user_id: Option<i64>,
+                        #[serde(default)]
+                        to_identity: Option<String>,
                         body: String,
                     }
                     fn is_base64ish(s: &str) -> bool {
@@ -115,13 +119,41 @@ pub(super) async fn handle_client_message(
                                 let _ = outbound.send(err);
                                 return Ok(());
                             }
-                            // Do not relay message bodies; instruct client to use WebRTC channel.
-                            let _ = req; // avoid unused warnings
-                            let info = ClientMessage {
-                                command: "error".to_string(),
-                                data: "Message relay disabled: use WebRTC".to_string(),
+                            let Some(from_id) = require_session_id(session_user_id, outbound)
+                            else {
+                                return Ok(());
                             };
-                            let _ = outbound.send(info);
+                            let target = if let Some(to) = req.to_user_id {
+                                to
+                            } else if let Some(identity) = req.to_identity.as_deref() {
+                                match webrtc::handler::identity_to_session_id(identity) {
+                                    Some(id) => id,
+                                    None => {
+                                        emit_error(outbound, "Invalid recipient identity");
+                                        return Ok(());
+                                    }
+                                }
+                            } else {
+                                emit_error(outbound, "Missing message recipient");
+                                return Ok(());
+                            };
+                            let relay_req = crate::messaging::models::DirectMessageReq {
+                                to_user_id: target,
+                                body: req.body,
+                            };
+                            if let Err(e) = crate::messaging::handlers::send_direct(
+                                Arc::clone(&state),
+                                Arc::clone(&conn),
+                                from_id,
+                                relay_req,
+                            )
+                            .await
+                            {
+                                emit_error(
+                                    outbound,
+                                    &format!("Failed to relay direct message: {e}"),
+                                );
+                            }
                         }
                         Err(_) => {
                             // Notify sender about malformed message request

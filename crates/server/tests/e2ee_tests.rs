@@ -128,7 +128,7 @@ async fn pubkey_set_and_get_and_opaque_message_flow() {
 
     // Fetching pubkey via DB by numeric id is not supported in identity mode; skip get_pubkey
 
-    // Alice sends an opaque E2EE envelope as body. Server should not relay bodies anymore.
+    // Alice sends an opaque E2EE envelope as body.
     let opaque_body = "v1:RU5WUEs=:Tk9OQ0U=:Q0lQSEVSVEVYVA=="; // sample opaque string
     let dm_req = ClientMessage {
         command: "message".into(),
@@ -139,23 +139,14 @@ async fn pubkey_set_and_get_and_opaque_message_flow() {
     };
     write_json(&mut c1, &dm_req).await;
 
-    // Sender should receive an error instructing to use WebRTC
-    let err_env = read_msg(&mut c1).await;
-    assert_eq!(err_env.command, "error");
-    assert!(err_env.data.contains("WebRTC"));
-
-    // Bob should NOT receive a relayed message over TCP (expect timeout)
-    use tokio::time::{Duration, timeout};
-    let mut buf = [0u8; 1024];
-    let no_recv = match timeout(Duration::from_millis(50), c2.read(&mut buf)).await {
-        Err(_) => true,      // timeout elapsed: no data
-        Ok(Ok(0)) => true,   // closed
-        Ok(Ok(_n)) => false, // data received (unexpected)
-        Ok(Err(_)) => true,  // read error treated as no delivery
-    };
-    assert!(no_recv);
-
-    // No server-side persistence nor relay anymore.
+    // Bob should receive the relayed message over TCP.
+    let delivered = read_msg(&mut c2).await;
+    assert_eq!(delivered.command, "message");
+    let payload: serde_json::Value = serde_json::from_str(&delivered.data).unwrap();
+    assert_eq!(
+        payload.get("from_user_id").and_then(|v| v.as_i64()),
+        Some(1)
+    );
 }
 
 #[tokio::test]

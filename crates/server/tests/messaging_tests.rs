@@ -8,7 +8,7 @@ use tokio::sync::mpsc;
 use tokio::time::{Duration, timeout};
 
 #[tokio::test]
-async fn direct_message_is_not_relayed_over_tcp() {
+async fn direct_message_is_relayed_over_tcp() {
     let state = Arc::new(AppState::default());
     let conn = Arc::new(Mutex::new(Connection::open(":memory:").unwrap()));
     {
@@ -37,7 +37,7 @@ async fn direct_message_is_not_relayed_over_tcp() {
     // Sender user id
     let alice_id = 1_i64;
 
-    // Attempt to send a direct message to Bob (server should not relay bodies)
+    // Attempt to send a direct message to Bob (server should relay bodies now)
     let req = DirectMessageReq {
         to_user_id: bob_id,
         body: "hello world".to_string(),
@@ -46,12 +46,16 @@ async fn direct_message_is_not_relayed_over_tcp() {
         .await
         .unwrap();
 
-    // Bob should NOT receive a relayed message over TCP
-    let res = timeout(Duration::from_millis(100), rx_bob.recv()).await;
-    assert!(
-        res.is_err(),
-        "server must not relay message bodies over TCP"
-    );
+    // Bob should receive a relayed message over TCP
+    let delivered = timeout(Duration::from_millis(100), rx_bob.recv())
+        .await
+        .expect("delivery timeout")
+        .expect("channel closed");
+    assert_eq!(delivered.command, "message");
+    let payload: rura_models::messaging::DirectMessageEvent =
+        serde_json::from_str(&delivered.data).expect("message payload");
+    assert_eq!(payload.from_user_id, alice_id);
+    assert_eq!(payload.body, "hello world");
 }
 
 #[tokio::test]

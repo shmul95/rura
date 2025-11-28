@@ -9,7 +9,7 @@ use tokio::sync::mpsc;
 use tokio::time::{Duration, timeout};
 
 #[tokio::test]
-async fn direct_message_bypasses_tcp_when_webrtc_active() {
+async fn direct_message_relays_even_when_rtc_active() {
     let state = Arc::new(AppState::default());
     let conn = Arc::new(Mutex::new(Connection::open(":memory:").unwrap()));
 
@@ -67,7 +67,7 @@ async fn direct_message_bypasses_tcp_when_webrtc_active() {
         let _ = timeout(Duration::from_millis(50), rx_alice.recv()).await;
     }
 
-    // Attempt to send a direct message via server relay; should be bypassed.
+    // Attempt to send a direct message via server relay; should still deliver.
     let req = DirectMessageReq {
         to_user_id: 2,
         body: "hello over rtc".into(),
@@ -76,14 +76,18 @@ async fn direct_message_bypasses_tcp_when_webrtc_active() {
         .await
         .expect("send_direct should not error");
 
-    // Assert Bob did not get a TCP relayed 'message'
-    let res = timeout(Duration::from_millis(50), rx_bob.recv()).await;
-    assert!(
-        res.is_err(),
-        "no TCP message should be delivered when RTC active"
-    );
+    // Assert Bob receives the TCP relayed 'message'
+    let delivered = timeout(Duration::from_millis(100), rx_bob.recv())
+        .await
+        .expect("delivery timeout")
+        .expect("channel closed");
+    assert_eq!(delivered.command, "message");
+    let payload: rura_models::messaging::DirectMessageEvent =
+        serde_json::from_str(&delivered.data).expect("payload");
+    assert_eq!(payload.from_user_id, 1);
+    assert_eq!(payload.body, "hello over rtc");
 
-    // Alice should also not get anything
+    // Alice should not receive a 'message' command since relay only targets recipient
     let res2 = timeout(Duration::from_millis(50), rx_alice.recv()).await;
     assert!(res2.is_err());
 }

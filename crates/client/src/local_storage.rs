@@ -15,6 +15,16 @@ pub struct LocalStorage {
     ephemeral: Arc<Mutex<Connection>>,
 }
 
+#[derive(Clone, Debug)]
+pub struct StoredCallState {
+    pub call_id: String,
+    pub remote_user_id: i64,
+    pub direction: String,
+    pub status: String,
+    pub audio_enabled: bool,
+    pub video_enabled: bool,
+}
+
 fn data_dir() -> PathBuf {
     if let Ok(custom) = std::env::var("RURA_CLIENT_DATA_DIR") {
         return PathBuf::from(custom);
@@ -197,6 +207,20 @@ fn init_persistent_schema(conn: &Connection) -> Result<(), String> {
         }
     }
 
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS call_state (
+            id INTEGER PRIMARY KEY CHECK(id = 1),
+            call_id TEXT NOT NULL,
+            remote_user_id INTEGER NOT NULL,
+            direction TEXT NOT NULL,
+            status TEXT NOT NULL,
+            audio_enabled INTEGER NOT NULL,
+            video_enabled INTEGER NOT NULL
+        )",
+        [],
+    )
+    .map_err(|e| format!("create call_state failed: {e}"))?;
+
     // Messages (persistent)
     conn.execute(
         "CREATE TABLE IF NOT EXISTS messages (
@@ -315,6 +339,20 @@ pub fn init_storage() -> Result<(), String> {
                  SELECT user_id, pubkey FROM disk.contacts",
                 [],
             );
+            let call_state_exists = persistent_conn
+                .prepare(
+                    "SELECT 1 FROM disk.sqlite_master WHERE type='table' AND name='call_state' LIMIT 1",
+                )
+                .map_err(|e| format!("prepare call_state exists failed: {e}"))?
+                .exists([])
+                .map_err(|e| format!("exec call_state exists failed: {e}"))?;
+            if call_state_exists {
+                let _ = persistent_conn.execute(
+                    "INSERT INTO call_state (id, call_id, remote_user_id, direction, status, audio_enabled, video_enabled)
+                     SELECT id, call_id, remote_user_id, direction, status, audio_enabled, video_enabled FROM disk.call_state",
+                    [],
+                );
+            }
             persistent_conn
                 .execute_batch("DETACH DATABASE disk;")
                 .map_err(|e| format!("detach tmp: {e}"))?;
@@ -601,6 +639,86 @@ pub fn get_contact_pubkey(user_id: &str) -> Result<Option<String>, String> {
             Ok(None)
         }
     })
+}
+
+pub fn save_call_state(state: &StoredCallState) -> Result<(), String> {
+    with_store(|store| {
+        store
+            .persistent
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO call_state (id, call_id, remote_user_id, direction, status, audio_enabled, video_enabled)
+                 VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(id) DO UPDATE SET
+                   call_id=excluded.call_id,
+                   remote_user_id=excluded.remote_user_id,
+                   direction=excluded.direction,
+                   status=excluded.status,
+                   audio_enabled=excluded.audio_enabled,
+                   video_enabled=excluded.video_enabled",
+                params![
+                    state.call_id,
+                    state.remote_user_id,
+                    state.direction,
+                    state.status,
+                    if state.audio_enabled { 1 } else { 0 },
+                    if state.video_enabled { 1 } else { 0 }
+                ],
+            )
+            .map(|_| ())
+            .map_err(|e| format!("upsert call_state failed: {e}"))
+    })?;
+    flush_persistent()
+}
+
+pub fn load_call_state() -> Result<Option<StoredCallState>, String> {
+    with_store(|store| {
+        let conn = store.persistent.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT call_id, remote_user_id, direction, status, audio_enabled, video_enabled
+                 FROM call_state WHERE id = 1",
+            )
+            .map_err(|e| format!("prepare load call_state failed: {e}"))?;
+        let mut rows = stmt
+            .query([])
+            .map_err(|e| format!("query call_state failed: {e}"))?;
+        if let Some(row) = rows
+            .next()
+            .map_err(|e| format!("row call_state failed: {e}"))?
+        {
+            Ok(Some(StoredCallState {
+                call_id: row.get(0).map_err(|e| format!("col call_id: {e}"))?,
+                remote_user_id: row.get(1).map_err(|e| format!("col remote: {e}"))?,
+                direction: row.get(2).map_err(|e| format!("col direction: {e}"))?,
+                status: row.get(3).map_err(|e| format!("col status: {e}"))?,
+                audio_enabled: {
+                    let v: i64 = row.get(4).map_err(|e| format!("col audio: {e}"))?;
+                    v != 0
+                },
+                video_enabled: {
+                    let v: i64 = row.get(5).map_err(|e| format!("col video: {e}"))?;
+                    v != 0
+                },
+            }))
+        } else {
+            Ok(None)
+        }
+    })
+}
+
+pub fn clear_call_state() -> Result<(), String> {
+    with_store(|store| {
+        store
+            .persistent
+            .lock()
+            .unwrap()
+            .execute("DELETE FROM call_state WHERE id = 1", [])
+            .map(|_| ())
+            .map_err(|e| format!("delete call_state failed: {e}"))
+    })?;
+    flush_persistent()
 }
 
 #[cfg(test)]

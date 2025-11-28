@@ -19,6 +19,9 @@ use std::net::TcpStream;
 // no path utilities needed after removing legacy JSON cache
 use crate::webrtc;
 use rand::RngCore;
+use rura_models::webrtc::{
+    CallAnswer, CallEndReason, CallHangup, CallInvite, CallMediaProfile, CallReject,
+};
 use sha2::{Digest, Sha256};
 use std::sync::{Arc, Once};
 
@@ -72,6 +75,262 @@ impl From<ModelHistoryMessage> for HistoryMessage {
 
 pub type HistoryRequest = rura_models::messaging::HistoryRequest;
 pub type HistoryResponse = rura_models::messaging::HistoryResponse;
+
+static CALL_STATE: Lazy<std::sync::Mutex<Option<CallState>>> =
+    Lazy::new(|| std::sync::Mutex::new(None));
+
+#[frb]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CallDirection {
+    Incoming,
+    Outgoing,
+}
+
+#[frb]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CallStatus {
+    Ringing,
+    Connected,
+}
+
+#[frb]
+#[derive(Clone, Debug)]
+pub struct CallState {
+    pub call_id: String,
+    pub remote_user_id: i64,
+    pub direction: CallDirection,
+    pub status: CallStatus,
+    pub audio_enabled: bool,
+    pub video_enabled: bool,
+}
+
+impl From<crate::local_storage::StoredCallState> for CallState {
+    fn from(row: crate::local_storage::StoredCallState) -> Self {
+        Self {
+            call_id: row.call_id,
+            remote_user_id: row.remote_user_id,
+            direction: if row.direction == "incoming" {
+                CallDirection::Incoming
+            } else {
+                CallDirection::Outgoing
+            },
+            status: if row.status == "connected" {
+                CallStatus::Connected
+            } else {
+                CallStatus::Ringing
+            },
+            audio_enabled: row.audio_enabled,
+            video_enabled: row.video_enabled,
+        }
+    }
+}
+
+impl From<&CallState> for crate::local_storage::StoredCallState {
+    fn from(state: &CallState) -> Self {
+        Self {
+            call_id: state.call_id.clone(),
+            remote_user_id: state.remote_user_id,
+            direction: match state.direction {
+                CallDirection::Incoming => "incoming".to_string(),
+                CallDirection::Outgoing => "outgoing".to_string(),
+            },
+            status: match state.status {
+                CallStatus::Connected => "connected".to_string(),
+                CallStatus::Ringing => "ringing".to_string(),
+            },
+            audio_enabled: state.audio_enabled,
+            video_enabled: state.video_enabled,
+        }
+    }
+}
+
+fn load_active_call_state() -> Result<Option<CallState>, String> {
+    if let Some(state) = CALL_STATE.lock().unwrap().clone() {
+        return Ok(Some(state));
+    }
+    crate::local_storage::init_storage()?;
+    let loaded = crate::local_storage::load_call_state()?.map(CallState::from);
+    let mut guard = CALL_STATE.lock().unwrap();
+    *guard = loaded.clone();
+    Ok(loaded)
+}
+
+fn persist_active_call_state(state: Option<CallState>) -> Result<(), String> {
+    crate::local_storage::init_storage()?;
+    {
+        let mut guard = CALL_STATE.lock().unwrap();
+        *guard = state.clone();
+    }
+    match state {
+        Some(ref entry) => {
+            let stored = crate::local_storage::StoredCallState::from(entry);
+            crate::local_storage::save_call_state(&stored)
+        }
+        None => crate::local_storage::clear_call_state(),
+    }
+}
+
+fn update_call_state_if_match<F>(call_id: &str, updater: F) -> Result<(), String>
+where
+    F: FnOnce(&mut CallState),
+{
+    if let Some(mut state) = load_active_call_state()? {
+        if state.call_id == call_id {
+            updater(&mut state);
+            persist_active_call_state(Some(state))?;
+        }
+    }
+    Ok(())
+}
+
+fn clear_call_state_if_match(call_id: &str) -> Result<(), String> {
+    if let Some(state) = load_active_call_state()? {
+        if state.call_id == call_id {
+            persist_active_call_state(None)?;
+        }
+    }
+    Ok(())
+}
+
+fn generate_call_id() -> String {
+    let mut bytes = [0u8; 16];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    hex::encode(bytes)
+}
+
+fn send_command_over_stream<T: serde::Serialize>(
+    user_id: i64,
+    command: &str,
+    payload: &T,
+) -> Result<(), String> {
+    let msg = ClientMessage {
+        command: command.to_string(),
+        data: serde_json::to_string(payload)
+            .map_err(|e| format!("serialize {command} payload: {e}"))?,
+    };
+    enqueue_command(user_id, msg)
+}
+
+pub(crate) fn call_id_for_remote(remote_user_id: i64) -> Option<String> {
+    CALL_STATE
+        .lock()
+        .unwrap()
+        .clone()
+        .filter(|state| state.remote_user_id == remote_user_id)
+        .map(|state| state.call_id)
+}
+
+fn record_call_invite(user_id: i64, invite: &CallInvite) -> Result<(), String> {
+    if invite.from_user_id != user_id && invite.to_user_id != user_id {
+        return Ok(());
+    }
+    let direction = if invite.from_user_id == user_id {
+        CallDirection::Outgoing
+    } else {
+        CallDirection::Incoming
+    };
+    let remote_user_id = if direction == CallDirection::Outgoing {
+        invite.to_user_id
+    } else {
+        invite.from_user_id
+    };
+    let state = CallState {
+        call_id: invite.call_id.clone(),
+        remote_user_id,
+        direction,
+        status: CallStatus::Ringing,
+        audio_enabled: invite.media.audio_enabled,
+        video_enabled: invite.media.video_enabled,
+    };
+    persist_active_call_state(Some(state))?;
+    Ok(())
+}
+
+fn record_call_answer(user_id: i64, answer: &CallAnswer) -> Result<(), String> {
+    if answer.from_user_id != user_id && answer.to_user_id != user_id {
+        return Ok(());
+    }
+    update_call_state_if_match(&answer.call_id, |state| {
+        state.status = CallStatus::Connected;
+        state.remote_user_id = if answer.from_user_id == user_id {
+            answer.to_user_id
+        } else {
+            answer.from_user_id
+        };
+        if let Some(media) = &answer.resume_media {
+            state.audio_enabled = media.audio_enabled;
+            state.video_enabled = media.video_enabled;
+        }
+    })
+}
+
+fn record_call_ringing(call_id: &str) -> Result<(), String> {
+    update_call_state_if_match(call_id, |state| {
+        state.status = CallStatus::Ringing;
+    })
+}
+
+fn record_call_end(call_id: &str) -> Result<(), String> {
+    clear_call_state_if_match(call_id)
+}
+
+fn forward_call_event(sink: &StreamSink<String>, command: &str, payload: &str) {
+    let line = format!(r#"{{"type":"{}","data":{}}}"#, command, payload);
+    let _ = sink.add(line);
+}
+
+fn handle_incoming_call_command(user_id: i64, command: &str, payload: &str) {
+    match command {
+        "call_invite" => {
+            if let Ok(invite) = serde_json::from_str::<CallInvite>(payload) {
+                if let Err(e) = record_call_invite(user_id, &invite) {
+                    eprintln!("[call] invite state error: {e}");
+                }
+            }
+        }
+        "call_ringing" => {
+            #[derive(serde::Deserialize)]
+            struct CallRingingView {
+                call_id: String,
+            }
+            if let Ok(view) = serde_json::from_str::<CallRingingView>(payload) {
+                if let Err(e) = record_call_ringing(&view.call_id) {
+                    eprintln!("[call] ringing state error: {e}");
+                }
+            }
+        }
+        "call_answer" => {
+            if let Ok(answer) = serde_json::from_str::<CallAnswer>(payload) {
+                if let Err(e) = record_call_answer(user_id, &answer) {
+                    eprintln!("[call] answer state error: {e}");
+                }
+            }
+        }
+        "call_reject" => {
+            #[derive(serde::Deserialize)]
+            struct CallRejectView {
+                call_id: String,
+            }
+            if let Ok(view) = serde_json::from_str::<CallRejectView>(payload) {
+                if let Err(e) = record_call_end(&view.call_id) {
+                    eprintln!("[call] reject state error: {e}");
+                }
+            }
+        }
+        "call_hangup" => {
+            #[derive(serde::Deserialize)]
+            struct CallHangupView {
+                call_id: String,
+            }
+            if let Ok(view) = serde_json::from_str::<CallHangupView>(payload) {
+                if let Err(e) = record_call_end(&view.call_id) {
+                    eprintln!("[call] hangup state error: {e}");
+                }
+            }
+        }
+        _ => {}
+    }
+}
 
 // ---------- Local cache helpers ----------
 
@@ -165,6 +424,111 @@ pub fn encrypt_message_for_identity(
 pub fn decrypt_message_from_envelope(envelope: String) -> Result<String, String> {
     let pt = crate::security::decrypt_from_envelope(&envelope)?;
     String::from_utf8(pt).map_err(|_| "plaintext not valid UTF-8".to_string())
+}
+
+#[frb]
+pub fn get_current_call_state() -> Result<Option<CallState>, String> {
+    load_active_call_state()
+}
+
+#[frb]
+pub fn start_call(
+    user_id: i64,
+    remote_user_id: i64,
+    enable_video: bool,
+) -> Result<CallState, String> {
+    if user_id == remote_user_id {
+        return Err("Cannot call yourself".to_string());
+    }
+    if load_active_call_state()?.is_some() {
+        return Err("Another call is already active".to_string());
+    }
+    let call_id = generate_call_id();
+    let media = CallMediaProfile {
+        audio_enabled: true,
+        video_enabled: enable_video,
+        audio_muted: Some(false),
+        video_muted: Some(!enable_video),
+    };
+    let invite = CallInvite {
+        call_id: call_id.clone(),
+        from_user_id: user_id,
+        to_user_id: remote_user_id,
+        media,
+        preview: None,
+        client: None,
+        ringing_timeout_ms: None,
+    };
+    send_command_over_stream(user_id, "call_invite", &invite)?;
+    let state = CallState {
+        call_id,
+        remote_user_id,
+        direction: CallDirection::Outgoing,
+        status: CallStatus::Ringing,
+        audio_enabled: true,
+        video_enabled: enable_video,
+    };
+    persist_active_call_state(Some(state.clone()))?;
+    Ok(state)
+}
+
+#[frb]
+pub fn accept_call(user_id: i64, call_id: String, enable_video: bool) -> Result<CallState, String> {
+    let mut state = load_active_call_state()?
+        .filter(|s| s.call_id == call_id)
+        .ok_or_else(|| "No matching call to accept".to_string())?;
+    let answer = CallAnswer {
+        call_id: call_id.clone(),
+        from_user_id: user_id,
+        to_user_id: state.remote_user_id,
+        resume_media: Some(CallMediaProfile {
+            audio_enabled: true,
+            video_enabled: enable_video,
+            audio_muted: Some(false),
+            video_muted: Some(!enable_video),
+        }),
+    };
+    send_command_over_stream(user_id, "call_answer", &answer)?;
+    state.status = CallStatus::Connected;
+    state.video_enabled = enable_video;
+    state.audio_enabled = true;
+    persist_active_call_state(Some(state.clone()))?;
+    Ok(state)
+}
+
+#[frb]
+pub fn reject_call(user_id: i64, call_id: String, busy: bool) -> Result<(), String> {
+    let state = load_active_call_state()?
+        .filter(|s| s.call_id == call_id)
+        .ok_or_else(|| "No matching call to reject".to_string())?;
+    let reject = CallReject {
+        call_id: call_id.clone(),
+        from_user_id: user_id,
+        to_user_id: state.remote_user_id,
+        reason: Some(if busy {
+            CallEndReason::Busy
+        } else {
+            CallEndReason::Rejected
+        }),
+        note: None,
+    };
+    send_command_over_stream(user_id, "call_reject", &reject)?;
+    persist_active_call_state(None)
+}
+
+#[frb]
+pub fn end_call(user_id: i64, call_id: String) -> Result<(), String> {
+    let state = load_active_call_state()?
+        .filter(|s| s.call_id == call_id)
+        .ok_or_else(|| "No matching call to end".to_string())?;
+    let hangup = CallHangup {
+        call_id,
+        from_user_id: user_id,
+        to_user_id: state.remote_user_id,
+        reason: Some(CallEndReason::Hangup),
+    };
+    send_command_over_stream(user_id, "call_hangup", &hangup)?;
+    persist_active_call_state(None)
 }
 
 fn build_root_store_from_pem(pem: &str) -> Result<RootCertStore, String> {
@@ -504,6 +868,19 @@ pub fn send_direct_message_tls(
 pub(crate) static SESSIONS: Lazy<std::sync::Mutex<HashMap<i64, Sender<String>>>> =
     Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
 
+fn enqueue_command(user_id: i64, msg: ClientMessage) -> Result<(), String> {
+    let tx = {
+        let guard = SESSIONS.lock().map_err(|_| "session lock".to_string())?;
+        guard.get(&user_id).cloned()
+    };
+    let Some(tx) = tx else {
+        return Err("No active stream session for user".to_string());
+    };
+    let mut line = serde_json::to_string(&msg).map_err(|e| format!("serialize: {e}"))?;
+    line.push('\n');
+    tx.send(line).map_err(|_| "send failed".to_string())
+}
+
 pub fn open_message_stream_tls(
     host: String,
     port: u16,
@@ -602,6 +979,11 @@ pub fn open_message_stream_tls(
                                     {
                                         let _ = webrtc::on_remote_ice(user_id, ice);
                                     }
+                                }
+                                cmd @ ("call_invite" | "call_ringing" | "call_answer"
+                                | "call_reject" | "call_hangup") => {
+                                    handle_incoming_call_command(user_id, cmd, &wrapper.data);
+                                    forward_call_event(&sink, cmd, &wrapper.data);
                                 }
                                 _ => {}
                             }
@@ -724,6 +1106,11 @@ pub fn open_message_stream_register_tls(
                                         let _ = webrtc::on_remote_ice(user_id, ice);
                                     }
                                 }
+                                cmd @ ("call_invite" | "call_ringing" | "call_answer"
+                                | "call_reject" | "call_hangup") => {
+                                    handle_incoming_call_command(user_id, cmd, &wrapper.data);
+                                    forward_call_event(&sink, cmd, &wrapper.data);
+                                }
                                 _ => {}
                             }
                         }
@@ -828,20 +1215,8 @@ pub fn send_direct_message_over_stream(
             body
         }
     };
-    // Always use WebRTC: start/ensure offer and queue/send via DataChannel.
-    let _ = crate::webrtc::ensure_offer(user_id, to_user_id);
-    // Include both numeric and identity fields for compatibility with UI consumers.
-    let my_identity = crate::security::load_identity()
-        .map_err(|e| format!("identity: {e}"))?
-        .map(|b| b.user_id)
-        .unwrap_or_default();
-    let event = serde_json::json!({
-        "from_user_id": user_id,
-        "from_identity": my_identity,
-        "body": body,
-    })
-    .to_string();
-    crate::webrtc::queue_or_send(to_user_id, event)
+    let req = rura_models::messaging::DirectMessageReq { to_user_id, body };
+    send_command_over_stream(user_id, "message", &req)
 }
 
 /// Send media bytes to a peer over the WebRTC data channel using chunked messages.
@@ -979,21 +1354,13 @@ pub fn send_direct_message_over_stream_to_identity(
             body
         }
     };
-    // Always use WebRTC: derive remote id, ensure offer, and queue/send via DataChannel.
     let remote_id = crate::webrtc::session_id_from_identity(&to_identity)
         .map_err(|_| "Invalid recipient identity".to_string())?;
-    let _ = crate::webrtc::ensure_offer_to_identity(user_id, &to_identity);
-    let my_identity = crate::security::load_identity()
-        .map_err(|e| format!("identity: {e}"))?
-        .map(|b| b.user_id)
-        .unwrap_or_default();
-    let event = serde_json::json!({
-        "from_user_id": user_id,
-        "from_identity": my_identity,
-        "body": body,
-    })
-    .to_string();
-    crate::webrtc::queue_or_send(remote_id, event)
+    let req = rura_models::messaging::DirectMessageReq {
+        to_user_id: remote_id,
+        body,
+    };
+    send_command_over_stream(user_id, "message", &req)
 }
 
 /// Publish a public key for the authenticated user via an existing stream session.
@@ -1355,21 +1722,49 @@ mod tests {
 
     #[test]
     #[serial_test::serial]
-    fn send_direct_message_rtc_only_numeric_ok() {
+    fn send_direct_message_over_stream_enqueues_to_session() {
         let body = sample_envelope();
-        // Should not attempt TCP relay; ensure it returns Ok even without a stream session.
-        let res = send_direct_message_over_stream(42, 7, body.clone());
-        assert!(res.is_ok());
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        {
+            let mut g = SESSIONS.lock().unwrap();
+            g.insert(42, tx);
+        }
+        send_direct_message_over_stream(42, 7, body.clone()).expect("send");
+        let line = rx.recv().expect("line");
+        let wrapper: ClientMessage = serde_json::from_str(line.trim_end()).expect("client message");
+        assert_eq!(wrapper.command, "message");
+        let payload: rura_models::messaging::DirectMessageReq =
+            serde_json::from_str(&wrapper.data).expect("payload");
+        assert_eq!(payload.to_user_id, 7);
+        {
+            let mut g = SESSIONS.lock().unwrap();
+            g.remove(&42);
+        }
     }
 
     #[test]
     #[serial_test::serial]
-    fn send_direct_message_rtc_only_identity_ok() {
+    fn send_direct_message_over_stream_identity_enqueues() {
         let body = sample_envelope();
-        // Use a valid base64 identity value (16 bytes -> 24 base64 chars)
-        let to_identity = base64::engine::general_purpose::STANDARD.encode([1u8; 16]);
-        let res = send_direct_message_over_stream_to_identity(99, to_identity, body.clone());
-        assert!(res.is_ok());
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        {
+            let mut g = SESSIONS.lock().unwrap();
+            g.insert(55, tx);
+        }
+        let mut identity_bytes = [0u8; 16];
+        identity_bytes[..8].copy_from_slice(&7_i64.to_be_bytes());
+        let to_identity = base64::engine::general_purpose::STANDARD.encode(identity_bytes);
+        send_direct_message_over_stream_to_identity(55, to_identity, body.clone()).expect("send");
+        let line = rx.recv().expect("line");
+        let wrapper: ClientMessage = serde_json::from_str(line.trim_end()).expect("client message");
+        assert_eq!(wrapper.command, "message");
+        let payload: rura_models::messaging::DirectMessageReq =
+            serde_json::from_str(&wrapper.data).expect("payload");
+        assert_eq!(payload.to_user_id, 7);
+        {
+            let mut g = SESSIONS.lock().unwrap();
+            g.remove(&55);
+        }
     }
 
     #[test]
