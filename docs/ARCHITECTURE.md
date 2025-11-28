@@ -75,6 +75,18 @@ Docs: [PROTOCOL.md](PROTOCOL.md) and [DATABASE.md](DATABASE.md) remain valid and
   - Authed commands: `set_pubkey` (store own pubkey), `get_pubkey` (fetch another user’s pubkey).
   - The server never stores private keys and never sees plaintext message content.
 
+### Call Signaling
+- A dedicated call-control layer now wraps the WebRTC SDP exchange:
+  - `call_invite`/`call_ringing`/`call_answer`/`call_reject`/`call_hangup`.
+  - `RtcOffer`/`RtcAnswer`/`IceCandidate` carry an optional `call_id`.
+- The server’s `webrtc::handler` will own an AppState-backed registry that
+  tracks each call state (`initiated`, `ringing`, `connected`, `ended`) plus
+  timestamps for cleanup. Only active calls may forward RTC offers, answers, or
+  ICE candidates.
+- Clients emit high-level call events to Flutter through the FRB APIs so the UI
+  can present incoming call sheets and in-call controls while the Rust side
+  manages the peer connections.
+
 ## Shared Models (crate `rura_models`)
 - `client_message`:
   - `ClientMessage { command, data }`

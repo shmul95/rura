@@ -149,3 +149,117 @@ Reassembly Event
 Security
 - WebRTC provides transport encryption (DTLS/SRTP). The server does not see or log media contents.
 - Application-level E2EE for media can be layered later by encrypting `data_b64` payloads prior to sending.
+
+## Call Signaling Commands
+
+High-level call control rides on the same TLS stream as chat signaling. All
+call-related commands MUST include a stable `call_id` so both the server and
+clients can correlate `rtc_*` payloads with a specific session.
+
+### State Machine
+
+1. `call_invite` — Initiator notifies the callee that a call is ringing. The
+   payload includes desired media (audio/video) and optional preview metadata.
+2. `call_ringing` — Server acknowledgement emitted to both parties to confirm
+   that the invite is active. Contains an `expires_at` timestamp so clients can
+   show countdown timers.
+3. `call_answer` — Callee accepted. This transitions the server-side session to
+   `connected` and allows `rtc_offer`/`rtc_answer`/`rtc_ice` messages to flow.
+4. `call_reject` — Callee declined or is busy. The server tears down state and
+   forwards the reason.
+5. `call_hangup` — Either side can hang up while ringing or connected. The
+   server marks the call `ended` and notifies the remote peer.
+
+`rtc_offer` and `rtc_answer` messages now include an optional `call_id`.
+Clients SHOULD populate it to guarantee that stale SDP blobs are not applied
+to the wrong peer connection. ICE candidates also carry `call_id` plus an
+optional `track` hint that names the MID/kind/stream for debugging purposes.
+
+### Payloads
+
+`call_invite` (client → server):
+```json
+{
+  "call_id": "28c88b8e-1d27-4f8c-9ef9-8b480f91a9f1",
+  "from_user_id": 1,
+  "to_user_id": 2,
+  "media": {
+    "audio_enabled": true,
+    "video_enabled": false,
+    "audio_muted": false,
+    "video_muted": true
+  },
+  "preview": {
+    "avatar_url": "https://cdn.example/avatar/alice.jpg",
+    "note": "Voice call"
+  },
+  "client": {
+    "device_label": "Mac mini",
+    "platform": "macos-x86_64",
+    "app_version": "0.4.0-dev"
+  },
+  "ringing_timeout_ms": 30000
+}
+```
+
+`call_ringing` (server → client):
+```json
+{
+  "call_id": "28c88b8e-1d27-4f8c-9ef9-8b480f91a9f1",
+  "callee_user_id": 2,
+  "ringing": true,
+  "expires_at": 1714418366000
+}
+```
+
+`call_answer`:
+```json
+{
+  "call_id": "28c88b8e-1d27-4f8c-9ef9-8b480f91a9f1",
+  "from_user_id": 2,
+  "to_user_id": 1,
+  "resume_media": {
+    "audio_enabled": true,
+    "video_enabled": true,
+    "audio_muted": false,
+    "video_muted": false
+  }
+}
+```
+
+`call_reject` and `call_hangup` share the same shape:
+```json
+{
+  "call_id": "28c88b8e-1d27-4f8c-9ef9-8b480f91a9f1",
+  "from_user_id": 2,
+  "to_user_id": 1,
+  "reason": "busy",
+  "note": "Already on a call"
+}
+```
+
+`rtc_ice` extensions:
+```json
+{
+  "from_user_id": 1,
+  "to_user_id": 2,
+  "call_id": "28c88b8e-1d27-4f8c-9ef9-8b480f91a9f1",
+  "candidate": "candidate:842163049 1 udp 1686052607 1.2.3.4 56143 typ srflx raddr 0.0.0.0 rport 0 generation 0 ufrag wCwE network-cost 999",
+  "sdp_mid": "0",
+  "sdp_mline_index": 0,
+  "track": {
+    "mid": "0",
+    "stream_id": "audio_123",
+    "track_id": "local_audio",
+    "kind": "audio"
+  }
+}
+```
+
+### Timing Expectations
+
+- Ringing expires after `ringing_timeout_ms` (default 30s). The server emits a
+  synthetic `call_hangup` with reason `timeout` when it cleans up.
+- After `call_answer`, either peer must send `rtc_offer` within 5s (configurable)
+  or the server downgrades the call to `failed`.
+- ICE keepalives older than 30s are dropped to protect against stale sessions.
