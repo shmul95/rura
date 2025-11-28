@@ -155,6 +155,24 @@ impl RtcSessionManager {
         Ok(meta.clone())
     }
 
+    pub fn ensure_pair_session(&mut self, a: i64, b: i64) {
+        let key = ordered_pair(a, b);
+        if self.sessions.contains_key(&key) {
+            return;
+        }
+        let call_id = format!("legacy-{}-{}", key.0, key.1);
+        let meta = CallSessionMeta {
+            call_id: call_id.clone(),
+            initiator: a,
+            callee: b,
+            state: CallSessionState::Connected,
+            last_activity: SystemTime::now(),
+            cleanup_deadline: None,
+        };
+        self.call_ids.insert(call_id, key);
+        self.sessions.insert(key, meta);
+    }
+
     pub fn cleanup(&mut self) -> Vec<(CallSessionMeta, CallEndReason)> {
         let now = SystemTime::now();
         let mut timed_out = Vec::new();
@@ -381,6 +399,13 @@ pub async fn process_call_hangup(
 
 pub async fn process_offer(state: Arc<AppState>, offer: RtcOffer) -> Result<(), CallError> {
     cleanup_stale_sessions(&state).await;
+    if offer.call_id.is_none() {
+        state
+            .with_rtc_sessions(|registry| {
+                registry.ensure_pair_session(offer.from_user_id, offer.to_user_id);
+            })
+            .await;
+    }
     ensure_call_active(
         &state,
         offer.call_id.as_deref(),
@@ -398,6 +423,13 @@ pub async fn process_offer(state: Arc<AppState>, offer: RtcOffer) -> Result<(), 
 
 pub async fn process_answer(state: Arc<AppState>, answer: RtcAnswer) -> Result<(), CallError> {
     cleanup_stale_sessions(&state).await;
+    if answer.call_id.is_none() {
+        state
+            .with_rtc_sessions(|registry| {
+                registry.ensure_pair_session(answer.from_user_id, answer.to_user_id);
+            })
+            .await;
+    }
     ensure_call_active(
         &state,
         answer.call_id.as_deref(),
@@ -415,6 +447,13 @@ pub async fn process_answer(state: Arc<AppState>, answer: RtcAnswer) -> Result<(
 
 pub async fn process_ice(state: Arc<AppState>, ice: IceCandidate) -> Result<(), CallError> {
     cleanup_stale_sessions(&state).await;
+    if ice.call_id.is_none() {
+        state
+            .with_rtc_sessions(|registry| {
+                registry.ensure_pair_session(ice.from_user_id, ice.to_user_id);
+            })
+            .await;
+    }
     ensure_call_active(
         &state,
         ice.call_id.as_deref(),
