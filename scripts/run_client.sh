@@ -1,70 +1,64 @@
 #!/usr/bin/env bash
-set -euo pipefail
+# Run the packaged Rura client
+set -e
 
-# Launch the Flutter client app with flutter_rust_bridge bindings.
-# Usage: scripts/run_client.sh [device]
-#   device: flutter device id (default: linux). Examples: linux, macos, windows
+PACKAGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+APP_DIR="$PACKAGE_DIR/flutter_app"
+LIB_DIR="$PACKAGE_DIR/lib"
 
-DEVICE="${1:-linux}"
-
-# Resolve repo root (this script lives under scripts/)
-ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-APP_DIR="$ROOT_DIR/crates/client/flutter_app"
-
-echo "[run_client] Repo root: $ROOT_DIR"
-
-if ! command -v flutter >/dev/null 2>&1; then
-  echo "[run_client] ERROR: 'flutter' not found on PATH. Please install Flutter and ensure 'flutter --version' works." >&2
-  exit 127
-fi
-
-# Create the Flutter app if it doesn't exist yet
-if [[ ! -d "$APP_DIR" ]]; then
-  echo "[run_client] Flutter app not found; creating at $APP_DIR"
-  "$ROOT_DIR/scripts/init_flutter_client.sh"
-fi
-
-echo "[run_client] Running FRB codegen"
-"$ROOT_DIR/scripts/frb_codegen.sh" "$APP_DIR" "$ROOT_DIR"
-
-echo "[run_client] Formatting Rust workspace (cargo fmt --all)"
-pushd "$ROOT_DIR" >/dev/null
-cargo fmt --all
-popd >/dev/null
-
-echo "[run_client] Building Rust client (release) into crates/client/target"
-export CARGO_TARGET_DIR="$ROOT_DIR/crates/client/target"
-pushd "$ROOT_DIR/crates/client" >/dev/null
-# Ensure we are not loading a stale library compiled with old FRB glue
-cargo clean -p rura_client >/dev/null 2>&1 || true
-cargo build --release
-popd >/dev/null
-
-LIB_PATH="$CARGO_TARGET_DIR/release/librura_client.so"
-if [[ "$OSTYPE" == darwin* ]]; then
-  LIB_PATH="$CARGO_TARGET_DIR/release/librura_client.dylib"
-elif [[ "${OS:-}" == Windows_NT ]]; then
-  LIB_PATH="$CARGO_TARGET_DIR/release/rura_client.dll"
-fi
-
-if [[ ! -f "$LIB_PATH" ]]; then
-  echo "[run_client] ERROR: Expected dynamic library not found at: $LIB_PATH" >&2
-  echo "            Make sure the build succeeded and the file exists." >&2
-  exit 3
-fi
-
-echo "[run_client] Launching Flutter app on device: $DEVICE (E2EE enforced, RTC-only messaging)"
-pushd "$APP_DIR" >/dev/null
-# Clean Flutter caches so Dart-side generated code matches the freshly built Rust lib
-flutter clean >/dev/null 2>&1 || true
-flutter pub get
-# Enforce E2EE in the client UI via a compile-time define; the Rust layer also rejects plaintext bodies.
-export RURA_RTC_ONLY=true
-# Ensure the dynamic loader can locate the freshly built library
-if [[ "$OSTYPE" == darwin* ]]; then
-  export DYLD_LIBRARY_PATH="$CARGO_TARGET_DIR/release:${DYLD_LIBRARY_PATH:-}"
+# Detect platform and set library path
+if [ "$(uname)" = "Darwin" ]; then
+    export DYLD_LIBRARY_PATH="$LIB_DIR:${DYLD_LIBRARY_PATH:-}"
+    LIB_EXT="dylib"
+elif [ "$(uname)" = "Linux" ]; then
+    export LD_LIBRARY_PATH="$LIB_DIR:${LD_LIBRARY_PATH:-}"
+    export LIBGL_ALWAYS_SOFTWARE=1
+    export MESA_LOADER_DRIVER_OVERRIDE="${MESA_LOADER_DRIVER_OVERRIDE:-swrast}"
+    export GDK_BACKEND="${GDK_BACKEND:-x11}"
+    if [ -z "${LIBGL_DRIVERS_PATH:-}" ] && command -v nix >/dev/null 2>&1; then
+        NIX_MESA_PATH="$(nix path-info nixpkgs#mesa.drivers 2>/dev/null || true)"
+        if [ -n "$NIX_MESA_PATH" ]; then
+            export LIBGL_DRIVERS_PATH="$NIX_MESA_PATH/lib/dri"
+        fi
+    fi
+    LIB_EXT="so"
 else
-  export LD_LIBRARY_PATH="$CARGO_TARGET_DIR/release:${LD_LIBRARY_PATH:-}"
+    # Windows (assuming Git Bash or similar)
+    export PATH="$LIB_DIR:$PATH"
+    LIB_EXT="dll"
 fi
-flutter run -d "$DEVICE" --dart-define=REQUIRE_E2EE=true
-popd >/dev/null
+
+# Check if library exists
+if [ ! -f "$LIB_DIR/librura_client.$LIB_EXT" ] && [ ! -f "$LIB_DIR/rura_client.dll" ]; then
+    echo "ERROR: Rust library not found in $LIB_DIR"
+    exit 1
+fi
+
+# Check if Flutter is installed
+if ! command -v flutter &> /dev/null; then
+    echo "ERROR: Flutter is not installed or not in PATH"
+    echo "Please install Flutter from: https://flutter.dev/docs/get-started/install"
+    exit 1
+fi
+
+echo "Starting Rura client..."
+echo "Library path: $LIB_DIR"
+echo "App directory: $APP_DIR"
+
+cd "$APP_DIR"
+
+# Detect available device (suppress broken pipe errors)
+DEVICES=$(flutter devices 2>/dev/null || true)
+FLUTTER_ARGS=("$@")
+
+if echo "$DEVICES" | grep -qi "Linux"; then
+    FLUTTER_ARGS+=("--enable-software-rendering")
+    flutter run -d linux "${FLUTTER_ARGS[@]}"
+elif echo "$DEVICES" | grep -qi "macOS"; then
+    flutter run -d macos "$@"
+elif echo "$DEVICES" | grep -qi "Windows"; then
+    flutter run -d windows "$@"
+else
+    echo "WARNING: No desktop device detected, trying default..."
+    flutter run "$@"
+fi

@@ -10,7 +10,7 @@ use ring::signature::{Ed25519KeyPair, KeyPair};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{atomic::{AtomicBool, Ordering}, Mutex};
 
 // Store the single encryption key (single account only).
 static KEY: Lazy<Mutex<Option<[u8; 32]>>> = Lazy::new(|| Mutex::new(None));
@@ -142,6 +142,19 @@ pub struct IdentityBundle {
     pub x25519_priv_b64: Option<String>,
 }
 
+fn log_identity(bundle: &IdentityBundle) {
+    static PRINTED: AtomicBool = AtomicBool::new(false);
+    if PRINTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    println!("(TEMPORARY) Your ID: {}", bundle.user_id);
+    if let Some(xpk) = &bundle.x25519_pub_b64 {
+        println!("(TEMPORARY) Your Public Key: {}", xpk);
+    } else {
+        println!("(TEMPORARY) Your Public Key: {}", bundle.public_b64);
+    }
+}
+
 pub fn generate_and_store_identity() -> Result<IdentityBundle, String> {
     let rng = SystemRandom::new();
     let pkcs8 =
@@ -170,13 +183,7 @@ pub fn generate_and_store_identity() -> Result<IdentityBundle, String> {
     let enc = encrypt_blob(&plain)?;
     ensure_dir(&data_dir())?;
     fs::write(identity_path(), enc).map_err(|e| format!("write identity: {e}"))?;
-    // TEMPORARY: Print only messaging key to avoid confusion
-    println!("(TEMPORARY) Your ID: {}", bundle.user_id);
-    if let Some(xpk) = &bundle.x25519_pub_b64 {
-        println!("(TEMPORARY) Your Public Key: {}", xpk);
-    } else {
-        println!("(TEMPORARY) Your Public Key: {}", bundle.public_b64);
-    }
+    log_identity(&bundle);
     Ok(bundle)
 }
 
@@ -200,6 +207,7 @@ pub fn load_identity() -> Result<Option<IdentityBundle>, String> {
             encrypt_blob(&serde_json::to_vec(&b).map_err(|e| format!("identity serialize: {e}"))?)?;
         fs::write(identity_path(), enc).map_err(|e| format!("write identity: {e}"))?;
     }
+    log_identity(&b);
     Ok(Some(b))
 }
 

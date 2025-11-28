@@ -51,6 +51,7 @@ Connect with TLS (two terminals)
 Flutter client (desktop)
 - One-liner: `./scripts/run_client.sh`
   - Script runs FRB codegen, builds the Rust client library, and launches Flutter.
+  - Requires Flutter/Dart SDK ≥3.4 (works with the dev-shell provided Flutter 3.38.x).
   - Default CA path in the UI: `../../../certs/ca.crt` (relative to the Flutter app folder).
   - Enter passphrase/password; tap Login or Register.
   - Chats list groups conversations by peer user id; tap to open a chat and send messages.
@@ -103,7 +104,7 @@ See: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for a module-by-module map and
 - Format: `cargo fmt --all`
 - Lint: `cargo clippy --all-targets --all-features -- -D warnings`
 - Test (server crate): `cd crates/server && cargo test`
-- Toolchain: stable Rust; rusqlite uses the `bundled` feature (no external SQLite needed)
+- Toolchain: nightly Rust (edition 2024) inside `nix develop`; rusqlite uses the `bundled` feature (no external SQLite needed)
 
 ## Tests & Coverage
 

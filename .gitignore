@@ -8,3 +8,5 @@ server.key
 crates/client/target
 certs
 data
+test1
+test2
