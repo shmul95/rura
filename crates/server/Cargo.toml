@@ -1,3 +1,5 @@
+cargo-features = ["edition2024"]
+
 [package]
 name = "rura_server"
 version = "0.1.0"
@@ -21,3 +23,4 @@ base64 = "0.21"
 
 [dev-dependencies]
 tokio = { version = "1.40", features = ["test-util"] }
+ 
