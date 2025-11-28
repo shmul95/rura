@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tokio::sync::{RwLock, mpsc};
 
 use crate::models::client_message::ClientMessage;
-use crate::webrtc::handler::identity_to_session_id;
+use crate::webrtc::handler::{RtcSessionManager, identity_to_session_id};
 
 #[derive(Clone)]
 pub struct ClientHandle {
@@ -13,6 +13,7 @@ pub struct ClientHandle {
 pub struct AppState {
     users: RwLock<HashMap<String, ClientHandle>>, // identity_key -> handle
     require_e2ee: bool,
+    rtc_sessions: tokio::sync::Mutex<RtcSessionManager>,
 }
 
 impl AppState {
@@ -20,6 +21,7 @@ impl AppState {
         Self {
             users: RwLock::new(HashMap::new()),
             require_e2ee,
+            rtc_sessions: tokio::sync::Mutex::new(RtcSessionManager::default()),
         }
     }
 
@@ -58,6 +60,14 @@ impl AppState {
 
     pub fn require_e2ee(&self) -> bool {
         self.require_e2ee
+    }
+
+    pub async fn with_rtc_sessions<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut RtcSessionManager) -> R,
+    {
+        let mut guard = self.rtc_sessions.lock().await;
+        f(&mut guard)
     }
 }
 

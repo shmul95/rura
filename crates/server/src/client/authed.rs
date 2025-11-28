@@ -10,6 +10,25 @@ use crate::utils::debug::debug_io_enabled;
 use crate::webrtc;
 use rusqlite::Connection;
 
+fn emit_error(outbound: &mpsc::UnboundedSender<ClientMessage>, msg: &str) {
+    let _ = outbound.send(ClientMessage {
+        command: "error".to_string(),
+        data: msg.to_string(),
+    });
+}
+
+fn require_session_id(
+    session_user_id: Option<i64>,
+    outbound: &mpsc::UnboundedSender<ClientMessage>,
+) -> Option<i64> {
+    if let Some(id) = session_user_id {
+        Some(id)
+    } else {
+        emit_error(outbound, "Missing session identity; reconnect required");
+        None
+    }
+}
+
 pub(super) async fn handle_client_message(
     state: Arc<AppState>,
     conn: Arc<Mutex<Connection>>,
@@ -21,6 +40,7 @@ pub(super) async fn handle_client_message(
     let received = String::from_utf8_lossy(buffer).to_string();
     match serde_json::from_str::<ClientMessage>(&received) {
         Ok(msg) => {
+            let session_user_id = webrtc::handler::identity_to_session_id(&user_id);
             if debug_io_enabled() {
                 // Avoid logging message bodies; only log safe signaling metadata.
                 if msg.command == "message" {
@@ -116,54 +136,154 @@ pub(super) async fn handle_client_message(
                 "rtc_offer" => {
                     match serde_json::from_str::<rura_models::webrtc::RtcOffer>(&msg.data) {
                         Ok(mut offer) => {
-                            if let Some(from_id) = webrtc::handler::identity_to_session_id(&user_id)
+                            let Some(from_id) = require_session_id(session_user_id, outbound)
+                            else {
+                                return Ok(());
+                            };
+                            offer.from_user_id = from_id;
+                            if let Err(err) = webrtc::process_offer(Arc::clone(&state), offer).await
                             {
-                                offer.from_user_id = from_id;
+                                emit_error(outbound, &format!("rtc_offer rejected: {err}"));
                             }
-                            webrtc::process_offer(Arc::clone(&state), offer).await;
                         }
                         Err(_) => {
-                            let err = ClientMessage {
-                                command: "error".to_string(),
-                                data: "Invalid rtc_offer format".to_string(),
-                            };
-                            let _ = outbound.send(err);
+                            emit_error(outbound, "Invalid rtc_offer format");
                         }
                     }
                 }
                 "rtc_answer" => {
                     match serde_json::from_str::<rura_models::webrtc::RtcAnswer>(&msg.data) {
                         Ok(mut answer) => {
-                            if let Some(from_id) = webrtc::handler::identity_to_session_id(&user_id)
+                            let Some(from_id) = require_session_id(session_user_id, outbound)
+                            else {
+                                return Ok(());
+                            };
+                            answer.from_user_id = from_id;
+                            if let Err(err) =
+                                webrtc::process_answer(Arc::clone(&state), answer).await
                             {
-                                answer.from_user_id = from_id;
+                                emit_error(outbound, &format!("rtc_answer rejected: {err}"));
                             }
-                            webrtc::process_answer(Arc::clone(&state), answer).await;
                         }
                         Err(_) => {
-                            let err = ClientMessage {
-                                command: "error".to_string(),
-                                data: "Invalid rtc_answer format".to_string(),
-                            };
-                            let _ = outbound.send(err);
+                            emit_error(outbound, "Invalid rtc_answer format");
                         }
                     }
                 }
                 "rtc_ice" => {
                     match serde_json::from_str::<rura_models::webrtc::IceCandidate>(&msg.data) {
                         Ok(mut ice) => {
-                            if let Some(from_id) = webrtc::handler::identity_to_session_id(&user_id)
-                            {
-                                ice.from_user_id = from_id;
+                            let Some(from_id) = require_session_id(session_user_id, outbound)
+                            else {
+                                return Ok(());
+                            };
+                            ice.from_user_id = from_id;
+                            if let Err(err) = webrtc::process_ice(Arc::clone(&state), ice).await {
+                                emit_error(outbound, &format!("rtc_ice rejected: {err}"));
                             }
-                            webrtc::process_ice(Arc::clone(&state), ice).await;
                         }
                         Err(_) => {
-                            let err = ClientMessage {
-                                command: "error".to_string(),
-                                data: "Invalid rtc_ice format".to_string(),
+                            emit_error(outbound, "Invalid rtc_ice format");
+                        }
+                    }
+                }
+                "call_invite" => {
+                    match serde_json::from_str::<rura_models::webrtc::CallInvite>(&msg.data) {
+                        Ok(mut invite) => {
+                            if invite.call_id.trim().is_empty() {
+                                emit_error(outbound, "call_invite missing call_id");
+                                return Ok(());
+                            }
+                            if !invite.media.audio_enabled && !invite.media.video_enabled {
+                                emit_error(outbound, "call_invite must enable audio or video");
+                                return Ok(());
+                            }
+                            let Some(from_id) = require_session_id(session_user_id, outbound)
+                            else {
+                                return Ok(());
                             };
-                            let _ = outbound.send(err);
+                            invite.from_user_id = from_id;
+                            match webrtc::process_call_invite(Arc::clone(&state), invite).await {
+                                Ok(()) => {}
+                                Err(err) => {
+                                    emit_error(outbound, &format!("call_invite rejected: {err}"));
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            emit_error(outbound, "Invalid call_invite format");
+                        }
+                    }
+                }
+                "call_answer" => {
+                    match serde_json::from_str::<rura_models::webrtc::CallAnswer>(&msg.data) {
+                        Ok(mut answer) => {
+                            if answer.call_id.trim().is_empty() {
+                                emit_error(outbound, "call_answer missing call_id");
+                                return Ok(());
+                            }
+                            let Some(from_id) = require_session_id(session_user_id, outbound)
+                            else {
+                                return Ok(());
+                            };
+                            answer.from_user_id = from_id;
+                            match webrtc::process_call_answer(Arc::clone(&state), answer).await {
+                                Ok(()) => {}
+                                Err(err) => {
+                                    emit_error(outbound, &format!("call_answer rejected: {err}"));
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            emit_error(outbound, "Invalid call_answer format");
+                        }
+                    }
+                }
+                "call_reject" => {
+                    match serde_json::from_str::<rura_models::webrtc::CallReject>(&msg.data) {
+                        Ok(mut reject) => {
+                            if reject.call_id.trim().is_empty() {
+                                emit_error(outbound, "call_reject missing call_id");
+                                return Ok(());
+                            }
+                            let Some(from_id) = require_session_id(session_user_id, outbound)
+                            else {
+                                return Ok(());
+                            };
+                            reject.from_user_id = from_id;
+                            match webrtc::process_call_reject(Arc::clone(&state), reject).await {
+                                Ok(()) => {}
+                                Err(err) => {
+                                    emit_error(outbound, &format!("call_reject rejected: {err}"));
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            emit_error(outbound, "Invalid call_reject format");
+                        }
+                    }
+                }
+                "call_hangup" => {
+                    match serde_json::from_str::<rura_models::webrtc::CallHangup>(&msg.data) {
+                        Ok(mut hangup) => {
+                            if hangup.call_id.trim().is_empty() {
+                                emit_error(outbound, "call_hangup missing call_id");
+                                return Ok(());
+                            }
+                            let Some(from_id) = require_session_id(session_user_id, outbound)
+                            else {
+                                return Ok(());
+                            };
+                            hangup.from_user_id = from_id;
+                            match webrtc::process_call_hangup(Arc::clone(&state), hangup).await {
+                                Ok(()) => {}
+                                Err(err) => {
+                                    emit_error(outbound, &format!("call_hangup rejected: {err}"));
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            emit_error(outbound, "Invalid call_hangup format");
                         }
                     }
                 }

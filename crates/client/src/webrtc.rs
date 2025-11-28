@@ -750,6 +750,7 @@ pub fn start_rtc_offer_over_stream(
         from_user_id: user_id,
         to_user_id,
         sdp,
+        call_id: None,
     };
     let msg = ClientMessage {
         command: "rtc_offer".into(),
@@ -768,6 +769,7 @@ pub fn send_rtc_answer_over_stream(
         from_user_id: user_id,
         to_user_id,
         sdp,
+        call_id: None,
     };
     let msg = ClientMessage {
         command: "rtc_answer".into(),
@@ -788,8 +790,10 @@ pub fn send_rtc_ice_over_stream(
         from_user_id: user_id,
         to_user_id,
         candidate,
+        call_id: None,
         sdp_mid,
         sdp_mline_index,
+        track: None,
     };
     let msg = ClientMessage {
         command: "rtc_ice".into(),
