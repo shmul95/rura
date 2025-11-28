@@ -13,6 +13,10 @@ This repo exposes a client crate (`crates/client`) to bridge Rust to Flutter usi
 
 ## 2) Create a Flutter app (in this repo) and run FRB codegen
 
+Prerequisite (run once):
+- Install the Rust-side code generator which all helper scripts rely on:
+  - `cargo install flutter_rust_bridge_codegen`
+
 - Option A (auto): Run the helper script to create a Flutter app under `crates/client/flutter_app` and generate bindings:
   - `scripts/init_flutter_client.sh`
   - If codegen fails, install the Rust CLI and re-run:
@@ -39,6 +43,14 @@ This repo exposes a client crate (`crates/client`) to bridge Rust to Flutter usi
   - macOS: `export DYLD_LIBRARY_PATH=../rura/target/debug:$DYLD_LIBRARY_PATH`
   - Windows (PowerShell): `$env:PATH += ';..\\rura\\target\\debug'`
 
+### Linux desktop / GL fallback
+
+- If `flutter run -d linux` fails with messages such as `FL_IS_ENGINE(self) failed`, `gdk_gl_context_make_current`, or `Failed to initialize GLArea: No GL implementation is available`, you're on a machine without a hardware OpenGL driver (common on VMs/CI).
+- Use the helper script which exports the right Mesa software-rendering vars and appends `--enable-software-rendering` automatically:
+  - `./scripts/run_flutter_desktop.sh` &nbsp;*(defaults to `crates/client/flutter_app`; pass another Flutter app path as the first argument to run a newly-created package).*
+- The script also wires up `LD_LIBRARY_PATH`/`DYLD_LIBRARY_PATH` for the compiled Rust library so you don't have to export it manually.
+- Packages created via `scripts/package_client.sh` ship with `run_flutter_desktop.sh` and a `run_client.sh` wrapper in the package root, so you can run it directly from the distributed folder without referencing the repository.
+
 ## 4) Call Rust from Dart (login example)
 
 - After codegen, import the generated files in your Flutter app (e.g., `lib/main.dart`):
@@ -58,7 +70,7 @@ This repo exposes a client crate (`crates/client`) to bridge Rust to Flutter usi
     ```
 
 Extra
-- The helper script `./scripts/run_client.sh` wires up codegen and builds the Rust library into `crates/client/target/release` so the generated loader can find it at runtime.
+- The helper script `./scripts/run_client.sh` wires up codegen and builds the Rust library into `target/release` so the generated loader can find it at runtime.
 
 Notes
 - FRB will regenerate `crates/client/src/bridge_generated.rs` and `lib/bridge_generated.dart` on each codegen run.
