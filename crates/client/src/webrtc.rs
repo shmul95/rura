@@ -600,10 +600,11 @@ fn spawn_offer(
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
         .is_err()
     {
-        if skip_if_open {
-            return Ok(());
-        }
-        return Err("negotiation already in progress".to_string());
+        // A negotiation is already in flight for this peer. Rather than
+        // failing the higher-level API (which surfaces as user-visible
+        // errors like "accept failed: negotiation already in progress"),
+        // treat this as a no-op and let the in-flight negotiation settle.
+        return Ok(());
     }
     let pc = Arc::clone(&peer.pc);
     let neg_flag = Arc::clone(&peer.negotiating);

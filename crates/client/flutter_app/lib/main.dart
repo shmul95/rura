@@ -512,13 +512,15 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
             final wantsVideo = (media?['video_enabled'] ?? false) as bool;
             final callId = payload['call_id']?.toString() ?? '';
             if (callId.isNotEmpty && mounted) {
-              // Record incoming call in conversation history.
+              // Record incoming call in conversation history. Always attribute
+              // the call bubble to the *initiator* so that both sides see
+              // "Call started/ended" on the caller side.
               final now = DateTime.now().toIso8601String();
               final peer = fromUser;
               final msg = HistoryMessage(
                 id: 0,
-                fromUserId: _selfId,
-                toUserId: peer,
+                fromUserId: peer,
+                toUserId: _selfId,
                 body: 'CALL:START',
                 timestamp: now,
               );
@@ -1408,10 +1410,17 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
       final now = DateTime.now().toIso8601String();
       final peer = idToNumeric(widget.recipientId);
       final body = wasRinging ? 'CALL:MISSED' : 'CALL:ENDED';
+      // Attribute call bubbles to the initiator so they always appear
+      // on the caller's side in both participants' UIs.
+      final fromIdForBubble = current.direction == CallDirection.outgoing
+          ? widget.selfUserId
+          : peer;
+      final toIdForBubble =
+          current.direction == CallDirection.outgoing ? peer : widget.selfUserId;
       final msg = HistoryMessage(
         id: 0,
-        fromUserId: widget.selfUserId,
-        toUserId: peer,
+        fromUserId: fromIdForBubble,
+        toUserId: toIdForBubble,
         body: body,
         timestamp: now,
       );
@@ -1553,10 +1562,18 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
                                 final now =
                                     DateTime.now().toIso8601String();
                                 final peer = idToNumeric(widget.recipientId);
+                                final fromIdForBubble =
+                                    _callState?.direction == CallDirection.outgoing
+                                        ? widget.selfUserId
+                                        : peer;
+                                final toIdForBubble =
+                                    _callState?.direction == CallDirection.outgoing
+                                        ? peer
+                                        : widget.selfUserId;
                                 final msg = HistoryMessage(
                                   id: 0,
-                                  fromUserId: widget.selfUserId,
-                                  toUserId: peer,
+                                  fromUserId: fromIdForBubble,
+                                  toUserId: toIdForBubble,
                                   body: 'CALL:MISSED',
                                   timestamp: now,
                                 );
