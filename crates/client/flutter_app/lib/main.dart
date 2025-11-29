@@ -995,6 +995,13 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
           }
           return;
         }
+        if (map['type'] == 'call_answer') {
+          // Either side may transition from "Calling…" / "Incoming call…"
+          // to "In call" when an answer arrives. Refresh the call state
+          // from Rust so the banner updates accordingly.
+          await _loadCallState();
+          return;
+        }
         if (map['type'] == 'call_hangup' || map['type'] == 'call_reject') {
           // Remote ended or rejected the call; refresh local call state so
           // the banner disappears and history/missed-call markers (if any)
