@@ -160,6 +160,7 @@ class MyApp extends StatelessWidget {
 
     return MaterialApp(
       title: 'Rura Client',
+      debugShowCheckedModeBanner: false,
       theme: lightTheme,
       darkTheme: darkTheme,
       themeMode: ThemeMode.system,

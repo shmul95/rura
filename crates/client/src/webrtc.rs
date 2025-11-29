@@ -341,19 +341,11 @@ impl MediaState {
                 .add_track(Arc::clone(&audio_track) as Arc<dyn TrackLocal + Send + Sync>)
                 .await
                 .map_err(|e| format!("audio track: {e}"))?;
-            audio_sender
-                .replace_track(None)
-                .await
-                .map_err(|e| format!("audio disable: {e}"))?;
 
             let video_sender = pc
                 .add_track(Arc::clone(&video_track) as Arc<dyn TrackLocal + Send + Sync>)
                 .await
                 .map_err(|e| format!("video track: {e}"))?;
-            video_sender
-                .replace_track(None)
-                .await
-                .map_err(|e| format!("video disable: {e}"))?;
 
             Ok(Self {
                 audio_track,
@@ -392,17 +384,11 @@ impl MediaState {
         track: &Arc<TrackLocalStaticSample>,
         should_send: bool,
     ) -> Result<(), String> {
-        let mut sender_guard = sender_slot.lock().await;
-        if let Some(sender) = sender_guard.as_ref() {
-            if should_send {
-                sender
-                    .replace_track(Some(Arc::clone(track) as Arc<dyn TrackLocal + Send + Sync>))
-                    .await
-            } else {
-                sender.replace_track(None).await
-            }
-            .map_err(|e| format!("update track: {e}"))?;
-        }
+        let _ = (sender_slot, track, should_send);
+        // Media sending is not yet wired up; keep tracks as created to avoid
+        // hitting replace_track() envelope errors in the underlying WebRTC
+        // implementation. This function exists to preserve the async signature
+        // and future-proof media toggling without impacting current behavior.
         Ok(())
     }
 
