@@ -512,6 +512,28 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
             final wantsVideo = (media?['video_enabled'] ?? false) as bool;
             final callId = payload['call_id']?.toString() ?? '';
             if (callId.isNotEmpty && mounted) {
+              // Record incoming call in conversation history.
+              final now = DateTime.now().toIso8601String();
+              final peer = fromUser;
+              final msg = HistoryMessage(
+                id: 0,
+                fromUserId: _selfId,
+                toUserId: peer,
+                body: 'CALL:START',
+                timestamp: now,
+              );
+              await appendLocalMessage(
+                fromUserId: msg.fromUserId,
+                toUserId: msg.toUserId,
+                body: msg.body,
+                timestamp: msg.timestamp,
+              );
+              _incoming.add(msg);
+              setState(() {
+                _groups.putIfAbsent(peer, () => []);
+                _groups[peer]!.add(msg);
+              });
+
               final peerName = _nicknames[fromUser] ??
                   _identityByPeer[fromUser] ??
                   fromUser.toString();
@@ -938,7 +960,8 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
     // Prefer processed inbound HistoryMessage stream for live refresh
     _inSub = widget.inbound?.listen((m) {
       final peer = idToNumeric(widget.recipientId);
-      if (m.fromUserId == peer) {
+      if ((m.fromUserId == peer && m.toUserId == widget.selfUserId) ||
+          (m.fromUserId == widget.selfUserId && m.toUserId == peer)) {
         setState(() => _messages.add(m));
         if (_scroll.hasClients) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -949,12 +972,35 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
         }
       }
     });
-    if (widget.inbound == null) {
-      // Fallback only when processed inbound is unavailable
-      _sub = widget.incomingRaw.listen((data) async {
-        try {
-          final map = jsonDecode(data) as Map;
-          if (map['type'] == 'auth_ok') return;
+    // Always listen to raw stream for call events; also use it for message
+    // fallback when processed inbound is unavailable.
+    _sub = widget.incomingRaw.listen((data) async {
+      try {
+        final map = jsonDecode(data) as Map;
+        if (map['type'] == 'auth_ok') return;
+        if (map['type'] == 'call_invite') {
+          final raw = map['data'];
+          final payload = raw is String ? jsonDecode(raw) as Map : raw as Map;
+          final toUser = payload['to_user_id'] as int?;
+          if (toUser == widget.selfUserId) {
+            final media = payload['media'] as Map?;
+            final wantsVideo = (media?['video_enabled'] ?? false) as bool;
+            final callId = payload['call_id']?.toString() ?? '';
+            if (callId.isNotEmpty && mounted) {
+              final peerName = _displayName ?? widget.recipientId;
+              await _loadCallState();
+            }
+          }
+          return;
+        }
+        if (map['type'] == 'call_hangup' || map['type'] == 'call_reject') {
+          // Remote ended or rejected the call; refresh local call state so
+          // the banner disappears and history/missed-call markers (if any)
+          // reflect the latest state.
+          await _loadCallState();
+          return;
+        }
+        if (widget.inbound == null) {
           final fromId = (map['from_identity'] ?? '').toString();
           final bodyRaw = map['body'] as String? ?? '';
           if (fromId == widget.recipientId) {
@@ -982,9 +1028,9 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
               });
             }
           }
-        } catch (_) {}
-      });
-    }
+        }
+      } catch (_) {}
+    });
     // No automatic contact handshake; require manual information exchange.
   }
 
@@ -1322,6 +1368,22 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
       );
       if (!mounted) return;
       setState(() => _callState = state);
+      // Reflect the outgoing call in the identity chat history.
+      final now = DateTime.now().toIso8601String();
+      final msg = HistoryMessage(
+        id: 0,
+        fromUserId: widget.selfUserId,
+        toUserId: remoteNumeric,
+        body: 'CALL:START',
+        timestamp: now,
+      );
+      await appendLocalMessage(
+        fromUserId: msg.fromUserId,
+        toUserId: msg.toUserId,
+        body: msg.body,
+        timestamp: msg.timestamp,
+      );
+      setState(() => _messages.add(msg));
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
             content: Text(
@@ -1342,6 +1404,25 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
     if (current == null || _callBusy) return;
     setState(() => _callBusy = true);
     try {
+      final wasRinging = current.status == CallStatus.ringing;
+      final now = DateTime.now().toIso8601String();
+      final peer = idToNumeric(widget.recipientId);
+      final body = wasRinging ? 'CALL:MISSED' : 'CALL:ENDED';
+      final msg = HistoryMessage(
+        id: 0,
+        fromUserId: widget.selfUserId,
+        toUserId: peer,
+        body: body,
+        timestamp: now,
+      );
+      await appendLocalMessage(
+        fromUserId: msg.fromUserId,
+        toUserId: msg.toUserId,
+        body: msg.body,
+        timestamp: msg.timestamp,
+      );
+      setState(() => _messages.add(msg));
+
       await endCall(userId: widget.selfUserId, callId: current.callId);
       if (!mounted) return;
       setState(() => _callState = null);
@@ -1430,14 +1511,81 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
                     child: Text(
                       _callState!.status == CallStatus.connected
                           ? 'In call'
-                          : 'Calling…',
+                          : (_callState!.direction == CallDirection.outgoing
+                              ? 'Calling…'
+                              : 'Incoming call…'),
                       style: Theme.of(context).textTheme.bodyMedium,
                     ),
                   ),
-                  TextButton(
-                    onPressed: _callBusy ? null : _endCurrentCall,
-                    child: const Text('End'),
-                  ),
+                  if (_callState!.direction == CallDirection.incoming &&
+                      _callState!.status == CallStatus.ringing) ...[
+                    TextButton(
+                      onPressed: _callBusy
+                          ? null
+                          : () async {
+                              try {
+                                final wantsVideo = _callState!.videoEnabled;
+                                final next = await acceptCall(
+                                  userId: widget.selfUserId,
+                                  callId: _callState!.callId,
+                                  enableVideo: wantsVideo,
+                                );
+                                if (mounted) {
+                                  setState(() => _callState = next);
+                                }
+                              } catch (e) {
+                                if (mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text('Accept failed: $e'),
+                                    ),
+                                  );
+                                }
+                              }
+                            },
+                      child: const Text('Accept'),
+                    ),
+                    TextButton(
+                      onPressed: _callBusy
+                          ? null
+                          : () async {
+                              try {
+                                final now =
+                                    DateTime.now().toIso8601String();
+                                final peer = idToNumeric(widget.recipientId);
+                                final msg = HistoryMessage(
+                                  id: 0,
+                                  fromUserId: widget.selfUserId,
+                                  toUserId: peer,
+                                  body: 'CALL:MISSED',
+                                  timestamp: now,
+                                );
+                                await appendLocalMessage(
+                                  fromUserId: msg.fromUserId,
+                                  toUserId: msg.toUserId,
+                                  body: msg.body,
+                                  timestamp: msg.timestamp,
+                                );
+                                if (mounted) {
+                                  setState(() => _messages.add(msg));
+                                }
+                                await rejectCall(
+                                  userId: widget.selfUserId,
+                                  callId: _callState!.callId,
+                                  busy: false,
+                                );
+                                if (mounted) {
+                                  setState(() => _callState = null);
+                                }
+                              } catch (_) {}
+                            },
+                      child: const Text('Decline'),
+                    ),
+                  ] else
+                    TextButton(
+                      onPressed: _callBusy ? null : _endCurrentCall,
+                      child: const Text('End'),
+                    ),
                 ],
               ),
             ),
@@ -1651,7 +1799,10 @@ class _ChatPageState extends State<ChatPage> {
     _loadFromLocal();
     _loadCallState();
     _inSub = widget.inbound?.listen((m) {
-      if (m.fromUserId == widget.peerUserId) {
+      if ((m.fromUserId == widget.peerUserId &&
+              m.toUserId == widget.selfUserId) ||
+          (m.fromUserId == widget.selfUserId &&
+              m.toUserId == widget.peerUserId)) {
         setState(() => _messages.add(m));
         if (_scroll.hasClients) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -2074,6 +2225,42 @@ Future<String> _decryptEnvelope(String body) async {
 
 Widget _renderMessageBody(HistoryMessage m, bool fromSelf) {
   final body = m.body;
+  if (body.startsWith('CALL:')) {
+    final parts = body.split(':');
+    final kind = parts.length >= 2 ? parts[1] : '';
+    String text;
+    switch (kind) {
+      case 'START':
+        text = 'Call started';
+        break;
+      case 'MISSED':
+        text = 'Missed call';
+        break;
+      case 'ENDED':
+        text = 'Call ended';
+        break;
+      default:
+        text = 'Call';
+        break;
+    }
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(
+          Icons.call,
+          size: 18,
+          color: fromSelf ? Colors.white : Colors.black,
+        ),
+        const SizedBox(width: 6),
+        Flexible(
+          child: Text(
+            text,
+            style: TextStyle(color: fromSelf ? Colors.white : Colors.black),
+          ),
+        ),
+      ],
+    );
+  }
   if (body.startsWith('IMG:')) {
     final path = body.substring(4);
     final f = File(path);

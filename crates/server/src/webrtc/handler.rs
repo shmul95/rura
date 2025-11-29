@@ -234,7 +234,15 @@ impl RtcSessionManager {
     fn user_busy(&self, user_id: i64) -> bool {
         self.sessions
             .values()
-            .any(|meta| meta.is_active() && (meta.initiator == user_id || meta.callee == user_id))
+            .any(|meta| {
+                // Treat legacy pair sessions (created for plain RTC offer/answer
+                // without an explicit call_id) as "conversation" channels that
+                // do not block new calls. Only explicit call sessions should
+                // participate in busy detection.
+                meta.is_active()
+                    && !meta.call_id.starts_with("legacy-")
+                    && (meta.initiator == user_id || meta.callee == user_id)
+            })
     }
 }
 
@@ -321,6 +329,10 @@ pub async fn process_call_invite(
     state
         .with_rtc_sessions(|registry| registry.create_invite(&invite, deadline))
         .await?;
+    println!(
+        "[webrtc] call_invite accepted: {} -> {} (call_id={})",
+        initiator, callee, invite.call_id
+    );
     let invite_msg = ClientMessage {
         command: "call_invite".into(),
         data: serde_json::to_string(&invite).unwrap(),

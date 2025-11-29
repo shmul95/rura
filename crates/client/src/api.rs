@@ -1061,6 +1061,149 @@ pub fn open_message_stream_tls(
     Ok(())
 }
 
+/// CLI helper: open a TLS stream, authenticate, and wire up the global
+/// `SESSIONS` map plus WebRTC handlers, returning the user_id and a channel
+/// that yields JSON event lines (messages + call events + rtc_media).
+///
+/// This mirrors `open_message_stream_tls` but uses a simple mpsc channel
+/// instead of a Flutter `StreamSink`.
+#[cfg(feature = "cli")]
+pub fn open_message_stream_cli(
+    host: String,
+    port: u16,
+    ca_pem: String,
+    passphrase: String,
+    password: String,
+) -> Result<(i64, Receiver<String>), String> {
+    // Establish TLS and authenticate
+    let mut tls = make_tls_stream(&host, port, &ca_pem)?;
+    let login = auth_over_stream(&mut tls, "login", passphrase, password)?;
+    if !login.success {
+        tls.conn.send_close_notify();
+        let _ = tls.flush();
+        return Err(login.message);
+    }
+    let user_id = login
+        .user_id
+        .ok_or_else(|| "Missing user_id".to_string())?;
+
+    // Configure a short read timeout to interleave reads with outgoing writes
+    let tcp = tls.get_mut();
+    let _ = tcp.set_read_timeout(Some(Duration::from_millis(200)));
+
+    // Channel for outgoing writes from API helpers
+    let (tx, rx_out): (Sender<String>, Receiver<String>) = mpsc::channel();
+    // Channel for inbound events delivered to the CLI
+    let (event_tx, event_rx): (Sender<String>, Receiver<String>) = mpsc::channel();
+    // Channel for inbound RTC messages (data channel); forward them to events
+    let (rtc_tx, rtc_rx): (Sender<String>, Receiver<String>) = mpsc::channel();
+    crate::webrtc::register_inbound_sink(user_id, rtc_tx);
+    {
+        let event_tx_clone = event_tx.clone();
+        thread::spawn(move || {
+            while let Ok(dc_msg) = rtc_rx.recv() {
+                let _ = event_tx_clone.send(dc_msg);
+            }
+        });
+    }
+    {
+        let mut g = SESSIONS.lock().unwrap();
+        g.insert(user_id, tx);
+    }
+
+    // Emit an initial auth_ok event so callers can learn user_id
+    let _ = event_tx.send(format!(r#"{{"type":"auth_ok","user_id":{}}}"#, user_id));
+
+    // Spawn a dedicated thread to own the TLS stream, read incoming events, and perform writes.
+    thread::spawn(move || {
+        let mut tls = tls; // move into thread
+        let mut buf = [0u8; 1024];
+        let mut acc: Vec<u8> = Vec::new();
+        loop {
+            // 1) Drain outgoing writes, if any
+            while let Ok(line) = rx_out.try_recv() {
+                let _ = tls.write_all(line.as_bytes());
+                let _ = tls.flush();
+            }
+            // RTC inbound is forwarded by a dedicated thread (see above)
+
+            // 2) Attempt to read incoming data
+            match tls.read(&mut buf) {
+                Ok(0) => break, // closed
+                Ok(n) => {
+                    acc.extend_from_slice(&buf[..n]);
+                    // Process complete lines
+                    while let Some(pos) = acc.iter().position(|&b| b == b'\n') {
+                        let line = acc.drain(..=pos).collect::<Vec<u8>>();
+                        let line = String::from_utf8_lossy(
+                            &line[..line.len().saturating_sub(1)],
+                        )
+                        .to_string();
+                        if let Ok(wrapper) = serde_json::from_str::<ClientMessage>(&line) {
+                            match wrapper.command.as_str() {
+                                "message" => {
+                                    let _ = event_tx.send(wrapper.data);
+                                }
+                                "rtc_offer" => {
+                                    if let Ok(ofr) = serde_json::from_str::<
+                                        rura_models::webrtc::RtcOffer,
+                                    >(&wrapper.data)
+                                    {
+                                        let _ = webrtc::on_remote_offer(user_id, ofr);
+                                    }
+                                }
+                                "rtc_answer" => {
+                                    if let Ok(ans) = serde_json::from_str::<
+                                        rura_models::webrtc::RtcAnswer,
+                                    >(&wrapper.data)
+                                    {
+                                        let _ = webrtc::on_remote_answer(user_id, ans);
+                                    }
+                                }
+                                "rtc_ice" => {
+                                    if let Ok(ice) = serde_json::from_str::<
+                                        rura_models::webrtc::IceCandidate,
+                                    >(&wrapper.data)
+                                    {
+                                        let _ = webrtc::on_remote_ice(user_id, ice);
+                                    }
+                                }
+                                cmd @ ("call_invite"
+                                | "call_ringing"
+                                | "call_answer"
+                                | "call_reject"
+                                | "call_hangup") => {
+                                    handle_incoming_call_command(user_id, cmd, &wrapper.data);
+                                    let line = format!(
+                                        r#"{{"type":"{}","data":{}}}"#,
+                                        cmd, wrapper.data
+                                    );
+                                    let _ = event_tx.send(line);
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    if e.kind() == io::ErrorKind::WouldBlock
+                        || e.kind() == io::ErrorKind::TimedOut
+                    {
+                        // No data; loop and try writes again
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+        let _ = tls.flush();
+        let mut g = SESSIONS.lock().unwrap();
+        g.remove(&user_id);
+    });
+
+    Ok((user_id, event_rx))
+}
+
 /// Keep a TLS session open and stream incoming direct messages (register flow).
 /// Same behavior as `open_message_stream_tls` but authenticates via `register`.
 #[frb]
