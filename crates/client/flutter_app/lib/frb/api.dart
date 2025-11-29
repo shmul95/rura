@@ -81,6 +81,39 @@ Future<void> rejectCall(
 Future<void> endCall({required PlatformInt64 userId, required String callId}) =>
     RustLib.instance.api.crateApiEndCall(userId: userId, callId: callId);
 
+Future<void> setMediaDevicePreferences({String? microphone, String? camera}) =>
+    RustLib.instance.api.crateApiSetMediaDevicePreferences(
+        microphone: microphone, camera: camera);
+
+Future<(String?, String?)> getMediaDevicePreferences() =>
+    RustLib.instance.api.crateApiGetMediaDevicePreferences();
+
+Future<void> updateCallMediaTracks(
+        {required PlatformInt64 userId,
+        required PlatformInt64 remoteUserId,
+        required bool audioEnabled,
+        required bool videoEnabled,
+        required bool audioMuted,
+        required bool videoMuted}) =>
+    RustLib.instance.api.crateApiUpdateCallMediaTracks(
+        userId: userId,
+        remoteUserId: remoteUserId,
+        audioEnabled: audioEnabled,
+        videoEnabled: videoEnabled,
+        audioMuted: audioMuted,
+        videoMuted: videoMuted);
+
+Future<void> setCallMuteState(
+        {required PlatformInt64 userId,
+        required PlatformInt64 remoteUserId,
+        required bool audioMuted,
+        required bool videoMuted}) =>
+    RustLib.instance.api.crateApiSetCallMuteState(
+        userId: userId,
+        remoteUserId: remoteUserId,
+        audioMuted: audioMuted,
+        videoMuted: videoMuted);
+
 /// Login to the TLS-only server and return the auth response.
 ///
 /// - `host`: e.g., "127.0.0.1" or "localhost"

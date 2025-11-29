@@ -1,23 +1,35 @@
 use crate::api::{ClientMessage, SESSIONS};
 use base64::Engine as _;
 use once_cell::sync::Lazy;
-use rura_models::webrtc::{IceCandidate, RtcAnswer, RtcOffer};
+use rura_models::webrtc::{CallMediaProfile, IceCandidate, RtcAnswer, RtcOffer};
 
 // WebRTC crates
+use rand::Rng;
 use sha2::{Digest, Sha256};
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::runtime::Runtime;
-use webrtc::api::APIBuilder;
+use tokio::task;
 use webrtc::api::interceptor_registry::register_default_interceptors;
-use webrtc::api::media_engine::MediaEngine;
-use webrtc::data_channel::RTCDataChannel;
+use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_OPUS, MIME_TYPE_VP8};
+use webrtc::api::APIBuilder;
 use webrtc::data_channel::data_channel_message::DataChannelMessage;
+use webrtc::data_channel::RTCDataChannel;
 use webrtc::ice_transport::ice_candidate::RTCIceCandidateInit;
 use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::interceptor::registry::Registry;
-use webrtc::peer_connection::RTCPeerConnection;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
+use webrtc::peer_connection::RTCPeerConnection;
+use webrtc::rtp_transceiver::rtp_codec::{RTCRtpCodecCapability, RTPCodecType};
+use webrtc::rtp_transceiver::rtp_receiver::RTCRtpReceiver;
+use webrtc::rtp_transceiver::RTCRtpTransceiver;
+use webrtc::rtp_transceiver::rtp_sender::RTCRtpSender;
+use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
+use webrtc::track::track_local::TrackLocal;
+use webrtc::track::track_remote::TrackRemote;
 
 #[derive(Default)]
 struct MediaAssembly {
@@ -269,13 +281,168 @@ static RT: Lazy<Runtime> = Lazy::new(|| {
         .expect("tokio runtime")
 });
 
+fn run_on_rt<F, T>(fut: F) -> T
+where
+    F: Future<Output = T> + Send + 'static,
+    T: Send + 'static,
+{
+    if tokio::runtime::Handle::try_current().is_ok() {
+        task::block_in_place(|| RT.block_on(fut))
+    } else {
+        RT.block_on(fut)
+    }
+}
+
+#[derive(Default)]
+struct DevicePreference {
+    microphone: Option<String>,
+    camera: Option<String>,
+}
+
+static DEVICE_PREF: Lazy<std::sync::Mutex<DevicePreference>> =
+    Lazy::new(|| std::sync::Mutex::new(DevicePreference::default()));
+
+struct MediaState {
+    audio_track: Arc<TrackLocalStaticSample>,
+    video_track: Arc<TrackLocalStaticSample>,
+    audio_sender: tokio::sync::Mutex<Option<Arc<RTCRtpSender>>>,
+    video_sender: tokio::sync::Mutex<Option<Arc<RTCRtpSender>>>,
+    audio_enabled: AtomicBool,
+    video_enabled: AtomicBool,
+    audio_muted: AtomicBool,
+    video_muted: AtomicBool,
+}
+
+impl MediaState {
+    fn new(pc: &Arc<RTCPeerConnection>) -> Result<Self, String> {
+        let pc = Arc::clone(pc);
+        run_on_rt(async move {
+            let audio_track = Arc::new(TrackLocalStaticSample::new(
+                RTCRtpCodecCapability {
+                    mime_type: MIME_TYPE_OPUS.to_owned(),
+                    clock_rate: 48_000,
+                    channels: 2,
+                    ..Default::default()
+                },
+                random_label("audio"),
+                random_label("audio-stream"),
+            ));
+            let video_track = Arc::new(TrackLocalStaticSample::new(
+                RTCRtpCodecCapability {
+                    mime_type: MIME_TYPE_VP8.to_owned(),
+                    clock_rate: 90_000,
+                    ..Default::default()
+                },
+                random_label("video"),
+                random_label("video-stream"),
+            ));
+
+            let audio_sender = pc
+                .add_track(Arc::clone(&audio_track) as Arc<dyn TrackLocal + Send + Sync>)
+                .await
+                .map_err(|e| format!("audio track: {e}"))?;
+            audio_sender
+                .replace_track(None)
+                .await
+                .map_err(|e| format!("audio disable: {e}"))?;
+
+            let video_sender = pc
+                .add_track(Arc::clone(&video_track) as Arc<dyn TrackLocal + Send + Sync>)
+                .await
+                .map_err(|e| format!("video track: {e}"))?;
+            video_sender
+                .replace_track(None)
+                .await
+                .map_err(|e| format!("video disable: {e}"))?;
+
+            Ok(Self {
+                audio_track,
+                video_track,
+                audio_sender: tokio::sync::Mutex::new(Some(audio_sender)),
+                video_sender: tokio::sync::Mutex::new(Some(video_sender)),
+                audio_enabled: AtomicBool::new(false),
+                video_enabled: AtomicBool::new(false),
+                audio_muted: AtomicBool::new(false),
+                video_muted: AtomicBool::new(false),
+            })
+        })
+    }
+
+    async fn apply_sender_state(&self) -> Result<(), String> {
+        self.apply_single_sender(
+            &self.audio_sender,
+            &self.audio_track,
+            self.audio_enabled.load(Ordering::SeqCst)
+                && !self.audio_muted.load(Ordering::SeqCst),
+        )
+        .await?;
+        self.apply_single_sender(
+            &self.video_sender,
+            &self.video_track,
+            self.video_enabled.load(Ordering::SeqCst)
+                && !self.video_muted.load(Ordering::SeqCst),
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn apply_single_sender(
+        &self,
+        sender_slot: &tokio::sync::Mutex<Option<Arc<RTCRtpSender>>>,
+        track: &Arc<TrackLocalStaticSample>,
+        should_send: bool,
+    ) -> Result<(), String> {
+        let mut sender_guard = sender_slot.lock().await;
+        if let Some(sender) = sender_guard.as_ref() {
+            if should_send {
+                sender
+                    .replace_track(Some(Arc::clone(track) as Arc<dyn TrackLocal + Send + Sync>))
+                    .await
+            } else {
+                sender.replace_track(None).await
+            }
+            .map_err(|e| format!("update track: {e}"))?;
+        }
+        Ok(())
+    }
+
+    fn summary(&self) -> serde_json::Value {
+        serde_json::json!({
+            "audio_enabled": self.audio_enabled.load(Ordering::SeqCst),
+            "video_enabled": self.video_enabled.load(Ordering::SeqCst),
+            "audio_muted": self.audio_muted.load(Ordering::SeqCst),
+            "video_muted": self.video_muted.load(Ordering::SeqCst),
+        })
+    }
+
+    fn update_flags(
+        &self,
+        audio_enabled: bool,
+        video_enabled: bool,
+        audio_muted: bool,
+        video_muted: bool,
+    ) {
+        self.audio_enabled.store(audio_enabled, Ordering::SeqCst);
+        self.video_enabled.store(video_enabled, Ordering::SeqCst);
+        self.audio_muted.store(audio_muted, Ordering::SeqCst);
+        self.video_muted.store(video_muted, Ordering::SeqCst);
+    }
+}
+
+fn random_label(prefix: &str) -> String {
+    let mut rng = rand::thread_rng();
+    format!("{}-{:08x}", prefix, rng.r#gen::<u32>())
+}
+
 #[derive(Clone)]
 struct Peer {
     pc: Arc<RTCPeerConnection>,
     dc: Arc<tokio::sync::Mutex<Option<Arc<RTCDataChannel>>>>,
-    open: Arc<std::sync::atomic::AtomicBool>,
-    negotiating: Arc<std::sync::atomic::AtomicBool>,
+    open: Arc<AtomicBool>,
+    negotiating: Arc<AtomicBool>,
     remote_id: i64,
+    owner_id: i64,
+    media: Arc<MediaState>,
 }
 
 static PEERS: Lazy<std::sync::Mutex<std::collections::HashMap<i64, Peer>>> =
@@ -297,6 +464,205 @@ pub fn register_inbound_sink(user_id: i64, tx: std::sync::mpsc::Sender<String>) 
 fn emit_inbound(user_id: i64, data: String) {
     if let Some(tx) = DC_INBOUND.lock().unwrap().get(&user_id).cloned() {
         let _ = tx.send(data);
+    }
+}
+
+fn emit_media_event(owner_id: i64, remote_id: i64, event: &str, data: serde_json::Value) {
+    let envelope = serde_json::json!({
+        "type": "rtc_media",
+        "event": event,
+        "remote_user_id": remote_id,
+        "call_id": crate::api::call_id_for_remote(remote_id),
+        "data": data,
+    });
+    emit_inbound(owner_id, envelope.to_string());
+}
+
+fn track_snapshot(track: &TrackRemote) -> serde_json::Value {
+    serde_json::json!({
+        "track_id": track.id(),
+        "stream_id": track.stream_id(),
+        "kind": codec_kind(track.kind()),
+        "ssrc": track.ssrc(),
+        "rid": track.rid(),
+        "texture_id": serde_json::Value::Null,
+    })
+}
+
+fn codec_kind(kind: RTPCodecType) -> &'static str {
+    match kind {
+        RTPCodecType::Audio => "audio",
+        RTPCodecType::Video => "video",
+        _ => "unknown",
+    }
+}
+
+fn wire_data_channel(
+    dc: &Arc<RTCDataChannel>,
+    remote_id: i64,
+    owner_id: i64,
+    open_flag: Arc<AtomicBool>,
+    neg_flag: Arc<AtomicBool>,
+    slot: Arc<tokio::sync::Mutex<Option<Arc<RTCDataChannel>>>>,
+    initiator: bool,
+) {
+    let rid = remote_id;
+    let open_for_open = Arc::clone(&open_flag);
+    let neg_for_open = Arc::clone(&neg_flag);
+    dc.on_open(Box::new(move || {
+        open_for_open.store(true, Ordering::SeqCst);
+        neg_for_open.store(false, Ordering::SeqCst);
+        println!(
+            "[rtc] data channel open{}",
+            if initiator { " (initiator)" } else { "" }
+        );
+        if let Some(mut pending) = QUEUES.lock().unwrap().remove(&rid) {
+            for msg in pending.drain(..) {
+                let _ = crate::webrtc::send_over_dc(rid, msg);
+            }
+        }
+        Box::pin(async {})
+    }));
+
+    let open_for_close = Arc::clone(&open_flag);
+    let neg_for_close = Arc::clone(&neg_flag);
+    let slot_for_close = Arc::clone(&slot);
+    dc.on_close(Box::new(move || {
+        open_for_close.store(false, Ordering::SeqCst);
+        neg_for_close.store(false, Ordering::SeqCst);
+        let slot_inner = Arc::clone(&slot_for_close);
+        run_on_rt(async move {
+            let mut guard = slot_inner.lock().await;
+            guard.take();
+        });
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            let _ = crate::webrtc::ensure_offer(owner_id, rid);
+        });
+        Box::pin(async {})
+    }));
+
+    dc.on_message(Box::new(move |msg: DataChannelMessage| {
+        let owner = owner_id;
+        Box::pin(async move {
+            if let Ok(text) = std::str::from_utf8(&msg.data) {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(text)
+                    && v.get("type").and_then(|s| s.as_str()) == Some("media")
+                {
+                    if let Err(e) = handle_media_chunk(v, owner) {
+                        eprintln!("[rtc] media chunk error: {}", e);
+                    }
+                    return;
+                }
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(text)
+                    && v.get("from_identity").and_then(|s| s.as_str()).is_some()
+                {
+                    let fid = v.get("from_identity").and_then(|s| s.as_str()).unwrap();
+                    let _ = crate::local_storage::init_storage();
+                    if matches!(crate::local_storage::get_contact_pubkey(fid), Ok(None)) {
+                        return;
+                    }
+                }
+                println!("[rtc] rx (user {}) {} bytes: {}", owner, text.len(), text);
+                let forward = decrypt_body_in_event(text);
+                emit_inbound(owner, forward);
+            }
+        })
+    }));
+}
+
+async fn ensure_data_channel(peer: &Peer) -> Result<(), String> {
+    let slot = Arc::clone(&peer.dc);
+    {
+        if slot.lock().await.is_some() {
+            return Ok(());
+        }
+    }
+    let dc = peer
+        .pc
+        .create_data_channel("msg", None)
+        .await
+        .map_err(|e| format!("dc: {e}"))?;
+    {
+        let mut guard = slot.lock().await;
+        *guard = Some(Arc::clone(&dc));
+    }
+    wire_data_channel(
+        &dc,
+        peer.remote_id,
+        peer.owner_id,
+        Arc::clone(&peer.open),
+        Arc::clone(&peer.negotiating),
+        slot,
+        true,
+    );
+    Ok(())
+}
+
+fn spawn_offer(
+    peer: Peer,
+    user_id: i64,
+    remote_id: i64,
+    ensure_dc: bool,
+    skip_if_open: bool,
+) -> Result<(), String> {
+    if skip_if_open && peer.open.load(Ordering::SeqCst) {
+        return Ok(());
+    }
+    if peer
+        .negotiating
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        if skip_if_open {
+            return Ok(());
+        }
+        return Err("negotiation already in progress".to_string());
+    }
+    let pc = Arc::clone(&peer.pc);
+    let neg_flag = Arc::clone(&peer.negotiating);
+    let media = Arc::clone(&peer.media);
+    let owner = peer.owner_id;
+    let peer_clone = peer.clone();
+    let neg_flag_for_fut = Arc::clone(&neg_flag);
+    let fut = async move {
+        if ensure_dc {
+            ensure_data_channel(&peer_clone).await?;
+        }
+        media
+            .apply_sender_state()
+            .await
+            .map_err(|e| format!("media state: {e}"))?;
+        emit_media_event(owner, remote_id, "local_state", media.summary());
+        let offer = pc
+            .create_offer(None)
+            .await
+            .map_err(|e| format!("offer: {e}"))?;
+        pc.set_local_description(offer.clone())
+            .await
+            .map_err(|e| format!("set_local: {e}"))?;
+        let payload = serde_json::to_string(&offer).map_err(|e| format!("serde: {e}"))?;
+        let res = start_rtc_offer_over_stream(user_id, remote_id, payload);
+        if res.is_err() {
+            neg_flag_for_fut.store(false, Ordering::SeqCst);
+        }
+        res
+    };
+    if tokio::runtime::Handle::try_current().is_ok() {
+        let neg_flag_for_spawn = Arc::clone(&neg_flag);
+        tokio::spawn(async move {
+            if let Err(e) = fut.await {
+                eprintln!("[rtc] offer error: {e}");
+                neg_flag_for_spawn.store(false, Ordering::SeqCst);
+            }
+        });
+        Ok(())
+    } else {
+        let res = RT.block_on(fut);
+        if res.is_err() {
+            neg_flag.store(false, Ordering::SeqCst);
+        }
+        res
     }
 }
 
@@ -363,12 +729,16 @@ fn get_or_create_peer(user_id: i64, remote_id: i64) -> Result<Peer, String> {
         .block_on(api.new_peer_connection(cfg))
         .map_err(|e| format!("pc: {e}"))?;
     let pc: Arc<RTCPeerConnection> = Arc::new(pc);
+    let media_state = MediaState::new(&pc)?;
+    let media = Arc::new(media_state);
     let peer = Peer {
         pc: Arc::clone(&pc),
         dc: Arc::new(tokio::sync::Mutex::new(None)),
-        open: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        negotiating: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        open: Arc::new(AtomicBool::new(false)),
+        negotiating: Arc::new(AtomicBool::new(false)),
         remote_id,
+        owner_id: user_id,
+        media: Arc::clone(&media),
     };
 
     // ICE candidates: forward to remote via server
@@ -379,9 +749,7 @@ fn get_or_create_peer(user_id: i64, remote_id: i64) -> Result<Peer, String> {
             let ice_user = ice_user;
             let ice_remote = ice_remote;
             Box::pin(async move {
-                if let Some(c) = cand
-                    && let Ok(json) = c.to_json()
-                {
+                if let Some(c) = cand && let Ok(json) = c.to_json() {
                     let _ = send_rtc_ice_over_stream(
                         ice_user,
                         ice_remote,
@@ -394,91 +762,93 @@ fn get_or_create_peer(user_id: i64, remote_id: i64) -> Result<Peer, String> {
         },
     ));
 
-    // Data channel callbacks will be attached later (when created or received)
-    let dc_open_flag = Arc::clone(&peer.open);
-    let dc_neg_flag = Arc::clone(&peer.negotiating);
-    let dc_slot = Arc::clone(&peer.dc);
-    let this_user = ice_user;
-    pc.on_data_channel(Box::new(move |dc: Arc<RTCDataChannel>| {
-        let dc_open_flag_open = Arc::clone(&dc_open_flag);
-        let dc_neg_flag_open = Arc::clone(&dc_neg_flag);
-        let dc_slot_set = Arc::clone(&dc_slot);
-        let dc_open_flag_close = Arc::clone(&dc_open_flag);
-        let dc_neg_flag_close = Arc::clone(&dc_neg_flag);
-        let dc_slot_clear = Arc::clone(&dc_slot);
+    // Remote media tracks -> forward metadata back to Flutter/UI layer
+    let track_owner = user_id;
+    let track_remote = remote_id;
+    pc.on_track(Box::new(
+        move |track: Arc<TrackRemote>,
+              _receiver: Arc<RTCRtpReceiver>,
+              _transceiver: Arc<RTCRtpTransceiver>| {
+        let added_owner = track_owner;
+        let added_remote = track_remote;
         Box::pin(async move {
-            let rid = peer.remote_id;
-            dc.on_open(Box::new(move || {
-                dc_open_flag_open.store(true, std::sync::atomic::Ordering::SeqCst);
-                dc_neg_flag_open.store(false, std::sync::atomic::Ordering::SeqCst);
-                println!("[rtc] data channel open");
-                // Flush queued messages for this remote id
-                if let Some(mut pending) = QUEUES.lock().unwrap().remove(&rid) {
-                    for msg in pending.drain(..) {
-                        let _ = crate::webrtc::send_over_dc(rid, msg);
+            emit_media_event(added_owner, added_remote, "track_added", track_snapshot(&track));
+
+            let mute_track: Arc<TrackRemote> = Arc::clone(&track);
+            track.onmute(Box::new(move || {
+                let mute_track: Arc<TrackRemote> = Arc::clone(&mute_track);
+                let fut: Pin<Box<dyn Future<Output = ()> + Send + 'static>> =
+                    Box::pin(async move {
+                        emit_media_event(
+                            added_owner,
+                            added_remote,
+                            "track_muted",
+                            serde_json::json!({
+                                "track_id": mute_track.id(),
+                            }),
+                        );
+                    });
+                fut
+            }));
+
+            let unmute_track: Arc<TrackRemote> = Arc::clone(&track);
+            track.onunmute(Box::new(move || {
+                let unmute_track: Arc<TrackRemote> = Arc::clone(&unmute_track);
+                let fut: Pin<Box<dyn Future<Output = ()> + Send + 'static>> =
+                    Box::pin(async move {
+                        emit_media_event(
+                            added_owner,
+                            added_remote,
+                            "track_unmuted",
+                            serde_json::json!({
+                                "track_id": unmute_track.id(),
+                            }),
+                        );
+                    });
+                fut
+            }));
+
+            let reader_track: Arc<TrackRemote> = Arc::clone(&track);
+            let owner_for_reader = added_owner;
+            let remote_for_reader = added_remote;
+            RT.spawn(async move {
+                let mut buf = vec![0u8; 1_200];
+                loop {
+                    match reader_track.read(&mut buf).await {
+                        Ok(_) => {}
+                        Err(e) => {
+                            emit_media_event(
+                                owner_for_reader,
+                                remote_for_reader,
+                                "track_closed",
+                                serde_json::json!({
+                                    "track_id": reader_track.id(),
+                                    "error": e.to_string(),
+                                }),
+                            );
+                            break;
+                        }
                     }
                 }
-                Box::pin(async {})
-            }));
-            // When DC closes, mark flags and attempt graceful re-offer later.
-            let my_user_id = this_user;
-            dc.on_close(Box::new(move || {
-                let rid = rid;
-                dc_open_flag_close.store(false, std::sync::atomic::Ordering::SeqCst);
-                dc_neg_flag_close.store(false, std::sync::atomic::Ordering::SeqCst);
-                // clear dc slot asynchronously
-                let dc_slot_for_close = Arc::clone(&dc_slot_clear);
-                let fut = async move {
-                    let mut slot = dc_slot_for_close.lock().await;
-                    *slot = None;
-                };
-                RT.block_on(fut);
-                // Small delayed re-offer; use thread sleep to avoid needing timers here
-                std::thread::spawn(move || {
-                    std::thread::sleep(std::time::Duration::from_millis(200));
-                    let _ = crate::webrtc::ensure_offer(my_user_id, rid);
-                });
-                Box::pin(async {})
-            }));
-            // Forward incoming DC messages to the app sink via DC_INBOUND
-            dc.on_message(Box::new(move |msg: DataChannelMessage| {
-                let this_user = this_user;
-                Box::pin(async move {
-                    if let Ok(text) = std::str::from_utf8(&msg.data) {
-                        // Attempt media reassembly first (JSON media envelope)
-                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(text)
-                            && v.get("type").and_then(|s| s.as_str()) == Some("media")
-                        {
-                            if let Err(e) = handle_media_chunk(v, this_user) {
-                                eprintln!("[rtc] media chunk error: {}", e);
-                            }
-                            return;
-                        }
-                        // Drop messages from unknown contacts when identity is provided
-                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(text)
-                            && v.get("from_identity").and_then(|s| s.as_str()).is_some()
-                        {
-                            let fid = v.get("from_identity").and_then(|s| s.as_str()).unwrap();
-                            let _ = crate::local_storage::init_storage();
-                            if matches!(crate::local_storage::get_contact_pubkey(fid), Ok(None)) {
-                                return;
-                            }
-                        }
-                        println!(
-                            "[rtc] rx (user {}) {} bytes: {}",
-                            this_user,
-                            text.len(),
-                            text
-                        );
-                        let forward = decrypt_body_in_event(text);
-                        emit_inbound(this_user, forward);
-                    } else {
-                        // For now ignore raw binary frames in this revision.
-                    }
-                })
-            }));
-            // store channel
-            *dc_slot_set.lock().await = Some(Arc::clone(&dc));
+            });
+        })
+    }));
+
+    let dc_slot = Arc::clone(&peer.dc);
+    let dc_open_flag = Arc::clone(&peer.open);
+    let dc_neg_flag = Arc::clone(&peer.negotiating);
+    pc.on_data_channel(Box::new(move |dc: Arc<RTCDataChannel>| {
+        let slot = Arc::clone(&dc_slot);
+        let open_flag = Arc::clone(&dc_open_flag);
+        let neg_flag = Arc::clone(&dc_neg_flag);
+        let rid = remote_id;
+        let owner = user_id;
+        Box::pin(async move {
+            {
+                let mut guard = slot.lock().await;
+                *guard = Some(Arc::clone(&dc));
+            }
+            wire_data_channel(&dc, rid, owner, open_flag, neg_flag, slot, false);
         })
     }));
 
@@ -493,148 +863,12 @@ pub fn ensure_offer_to_identity(user_id: i64, to_identity: &str) -> Result<(), S
 
 pub fn ensure_offer(user_id: i64, remote_id: i64) -> Result<(), String> {
     let peer = get_or_create_peer(user_id, remote_id)?;
-    // If already open or in progress, do nothing.
-    if peer.open.load(std::sync::atomic::Ordering::SeqCst)
-        || peer.negotiating.load(std::sync::atomic::Ordering::SeqCst)
-    {
-        return Ok(());
-    }
-    // Check if a channel already exists in the slot; if so, assume negotiation pending.
-    let has_dc = if tokio::runtime::Handle::try_current().is_ok() {
-        // Can't block here; approximate by checking without await (use try_lock via now_or_never pattern)
-        false
-    } else {
-        RT.block_on(async { peer.dc.lock().await.is_some() })
-    };
-    if has_dc {
-        return Ok(());
-    }
-    peer.negotiating
-        .store(true, std::sync::atomic::Ordering::SeqCst);
-    let pc = Arc::clone(&peer.pc);
-    let dc_slot = Arc::clone(&peer.dc);
-    let open_flag = Arc::clone(&peer.open);
-    let neg_flag = Arc::clone(&peer.negotiating);
-    let fut = async move {
-        // Create data channel as initiator and generate offer
-        // Skip if slot already filled by a remote-initiated channel
-        {
-            let existing = dc_slot.lock().await;
-            if existing.is_some() {
-                drop(existing);
-            } else {
-                drop(existing);
-                let dc = pc
-                    .create_data_channel("msg", None)
-                    .await
-                    .map_err(|e| format!("dc: {e}"))?;
-                {
-                    let mut slot = dc_slot.lock().await;
-                    *slot = Some(Arc::clone(&dc));
-                }
-                dc.on_open(Box::new({
-                    let open = Arc::clone(&open_flag);
-                    let neg = Arc::clone(&neg_flag);
-                    let rid = remote_id;
-                    move || {
-                        open.store(true, std::sync::atomic::Ordering::SeqCst);
-                        neg.store(false, std::sync::atomic::Ordering::SeqCst);
-                        println!("[rtc] data channel open (initiator)");
-                        // Flush queued messages for this remote id
-                        if let Some(mut pending) = QUEUES.lock().unwrap().remove(&rid) {
-                            for msg in pending.drain(..) {
-                                let _ = crate::webrtc::send_over_dc(rid, msg);
-                            }
-                        }
-                        Box::pin(async {})
-                    }
-                }));
-                // Attach on_message for initiator as well, so it can receive.
-                let my_user = user_id;
-                let rid2 = remote_id;
-                dc.on_message(Box::new(move |msg: DataChannelMessage| {
-                    let my_user = my_user;
-                    let rid2 = rid2;
-                    Box::pin(async move {
-                        if let Ok(text) = std::str::from_utf8(&msg.data) {
-                            // Attempt media reassembly first (JSON media envelope)
-                            if let Ok(v) = serde_json::from_str::<serde_json::Value>(text)
-                                && v.get("type").and_then(|s| s.as_str()) == Some("media")
-                            {
-                                if let Err(e) = handle_media_chunk(v, my_user) {
-                                    eprintln!("[rtc] media chunk error: {}", e);
-                                }
-                                return;
-                            }
-                            // Drop messages from unknown contacts when identity is provided
-                            if let Ok(v) = serde_json::from_str::<serde_json::Value>(text)
-                                && v.get("from_identity").and_then(|s| s.as_str()).is_some()
-                            {
-                                let fid = v.get("from_identity").and_then(|s| s.as_str()).unwrap();
-                                let _ = crate::local_storage::init_storage();
-                                if matches!(crate::local_storage::get_contact_pubkey(fid), Ok(None))
-                                {
-                                    return;
-                                }
-                            }
-                            println!(
-                                "[rtc] rx (user {} from {}) {} bytes: {}",
-                                my_user,
-                                rid2,
-                                text.len(),
-                                text
-                            );
-                            let forward = decrypt_body_in_event(text);
-                            emit_inbound(my_user, forward);
-                        } else {
-                            // For now ignore raw binary frames in this revision.
-                        }
-                    })
-                }));
-                // Attach on_close symmetric to receiver path
-                let dc_slot_clear = Arc::clone(&dc_slot);
-                let open_for_close = Arc::clone(&open_flag);
-                let neg_for_close = Arc::clone(&neg_flag);
-                dc.on_close(Box::new(move || {
-                    open_for_close.store(false, std::sync::atomic::Ordering::SeqCst);
-                    neg_for_close.store(false, std::sync::atomic::Ordering::SeqCst);
-                    let fut = async {
-                        let mut slot = dc_slot_clear.lock().await;
-                        *slot = None;
-                    };
-                    RT.block_on(fut);
-                    // Re-offer after a short delay
-                    std::thread::spawn(move || {
-                        std::thread::sleep(std::time::Duration::from_millis(200));
-                        let _ = crate::webrtc::ensure_offer(user_id, remote_id);
-                    });
-                    Box::pin(async {})
-                }));
-            }
-        }
-        let offer = pc
-            .create_offer(None)
-            .await
-            .map_err(|e| format!("offer: {e}"))?;
-        pc.set_local_description(offer.clone())
-            .await
-            .map_err(|e| format!("set_local: {e}"))?;
-        let payload = serde_json::to_string(&offer).map_err(|e| format!("serde: {e}"))?;
-        let res = start_rtc_offer_over_stream(user_id, remote_id, payload);
-        if res.is_err() {
-            // allow retry later
-            neg_flag.store(false, std::sync::atomic::Ordering::SeqCst);
-        }
-        res
-    };
-    if tokio::runtime::Handle::try_current().is_ok() {
-        tokio::spawn(async move {
-            let _ = fut.await;
-        });
-        Ok(())
-    } else {
-        RT.block_on(fut)
-    }
+    spawn_offer(peer, user_id, remote_id, true, true)
+}
+
+pub fn renegotiate_media(user_id: i64, remote_id: i64) -> Result<(), String> {
+    let peer = get_or_create_peer(user_id, remote_id)?;
+    spawn_offer(peer, user_id, remote_id, false, false)
 }
 
 pub fn on_remote_offer(user_id: i64, offer: RtcOffer) -> Result<(), String> {
@@ -691,7 +925,7 @@ pub fn on_remote_ice(user_id: i64, ice: IceCandidate) -> Result<(), String> {
 
 pub fn is_channel_open(remote_id: i64) -> bool {
     if let Some(peer) = PEERS.lock().unwrap().get(&remote_id) {
-        return peer.open.load(std::sync::atomic::Ordering::SeqCst);
+        return peer.open.load(Ordering::SeqCst);
     }
     false
 }
@@ -700,7 +934,7 @@ pub fn send_over_dc(remote_id: i64, data: String) -> Result<(), String> {
     let Some(peer) = PEERS.lock().unwrap().get(&remote_id).cloned() else {
         return Err("no rtc peer".into());
     };
-    if !peer.open.load(std::sync::atomic::Ordering::SeqCst) {
+    if !peer.open.load(Ordering::SeqCst) {
         return Err("rtc channel not open".into());
     }
     let fut = async move {
@@ -738,6 +972,70 @@ pub fn queue_or_send(remote_id: i64, event_json: String) -> Result<(), String> {
     );
     g.entry(remote_id).or_default().push(event_json);
     Ok(())
+}
+
+pub fn set_media_devices(microphone: Option<String>, camera: Option<String>) {
+    let mut prefs = DEVICE_PREF.lock().unwrap();
+    prefs.microphone = microphone;
+    prefs.camera = camera;
+}
+
+pub fn current_media_devices() -> (Option<String>, Option<String>) {
+    let prefs = DEVICE_PREF.lock().unwrap();
+    (prefs.microphone.clone(), prefs.camera.clone())
+}
+
+pub fn teardown_peer(remote_id: i64) {
+    if let Some(peer) = PEERS.lock().unwrap().remove(&remote_id) {
+        let pc = Arc::clone(&peer.pc);
+        run_on_rt(async move {
+            let _ = pc.close().await;
+        });
+        emit_media_event(
+            peer.owner_id,
+            remote_id,
+            "peer_closed",
+            serde_json::json!({}),
+        );
+    }
+}
+
+pub fn apply_call_media_profile(
+    user_id: i64,
+    remote_id: i64,
+    profile: &CallMediaProfile,
+) -> Result<(), String> {
+    let peer = get_or_create_peer(user_id, remote_id)?;
+    peer.media.update_flags(
+        profile.audio_enabled,
+        profile.video_enabled,
+        profile.audio_muted.unwrap_or(false),
+        profile.video_muted.unwrap_or(false),
+    );
+    spawn_offer(peer, user_id, remote_id, false, false)
+}
+
+pub fn update_mute_state(
+    user_id: i64,
+    remote_id: i64,
+    audio_muted: Option<bool>,
+    video_muted: Option<bool>,
+) -> Result<(), String> {
+    let peer = get_or_create_peer(user_id, remote_id)?;
+    let audio_enabled = peer.media.audio_enabled.load(Ordering::SeqCst);
+    let video_enabled = peer.media.video_enabled.load(Ordering::SeqCst);
+    let mut audio_flag = peer.media.audio_muted.load(Ordering::SeqCst);
+    let mut video_flag = peer.media.video_muted.load(Ordering::SeqCst);
+    if let Some(flag) = audio_muted {
+        audio_flag = flag;
+    }
+    if let Some(flag) = video_muted {
+        video_flag = flag;
+    }
+    peer
+        .media
+        .update_flags(audio_enabled, video_enabled, audio_flag, video_flag);
+    spawn_offer(peer, user_id, remote_id, false, false)
 }
 
 /// Send an SDP offer to a peer via server signaling (over the TLS stream).
@@ -855,5 +1153,14 @@ mod tests {
         assert_eq!(v.get("from_user_id").and_then(|n| n.as_i64()), Some(5));
         assert_eq!(v.get("to_user_id").and_then(|n| n.as_i64()), Some(6));
         assert_eq!(v.get("candidate").and_then(|s| s.as_str()), Some("cand"));
+    }
+
+    #[test]
+    fn device_preferences_round_trip() {
+        set_media_devices(Some("mic".into()), Some("cam".into()));
+        let (mic, cam) = current_media_devices();
+        assert_eq!(mic.as_deref(), Some("mic"));
+        assert_eq!(cam.as_deref(), Some("cam"));
+        set_media_devices(None, None);
     }
 }

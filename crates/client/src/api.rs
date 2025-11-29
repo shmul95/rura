@@ -271,6 +271,11 @@ fn record_call_ringing(call_id: &str) -> Result<(), String> {
 }
 
 fn record_call_end(call_id: &str) -> Result<(), String> {
+    if let Some(state) = load_active_call_state()? {
+        if state.call_id == call_id {
+            crate::webrtc::teardown_peer(state.remote_user_id);
+        }
+    }
     clear_call_state_if_match(call_id)
 }
 
@@ -459,6 +464,7 @@ pub fn start_call(
         client: None,
         ringing_timeout_ms: None,
     };
+    crate::webrtc::apply_call_media_profile(user_id, remote_user_id, &invite.media)?;
     send_command_over_stream(user_id, "call_invite", &invite)?;
     let state = CallState {
         call_id,
@@ -477,18 +483,20 @@ pub fn accept_call(user_id: i64, call_id: String, enable_video: bool) -> Result<
     let mut state = load_active_call_state()?
         .filter(|s| s.call_id == call_id)
         .ok_or_else(|| "No matching call to accept".to_string())?;
+    let resume = CallMediaProfile {
+        audio_enabled: true,
+        video_enabled: enable_video,
+        audio_muted: Some(false),
+        video_muted: Some(!enable_video),
+    };
     let answer = CallAnswer {
         call_id: call_id.clone(),
         from_user_id: user_id,
         to_user_id: state.remote_user_id,
-        resume_media: Some(CallMediaProfile {
-            audio_enabled: true,
-            video_enabled: enable_video,
-            audio_muted: Some(false),
-            video_muted: Some(!enable_video),
-        }),
+        resume_media: Some(resume.clone()),
     };
     send_command_over_stream(user_id, "call_answer", &answer)?;
+    crate::webrtc::apply_call_media_profile(user_id, state.remote_user_id, &resume)?;
     state.status = CallStatus::Connected;
     state.video_enabled = enable_video;
     state.audio_enabled = true;
@@ -513,6 +521,7 @@ pub fn reject_call(user_id: i64, call_id: String, busy: bool) -> Result<(), Stri
         note: None,
     };
     send_command_over_stream(user_id, "call_reject", &reject)?;
+    crate::webrtc::teardown_peer(state.remote_user_id);
     persist_active_call_state(None)
 }
 
@@ -528,7 +537,50 @@ pub fn end_call(user_id: i64, call_id: String) -> Result<(), String> {
         reason: Some(CallEndReason::Hangup),
     };
     send_command_over_stream(user_id, "call_hangup", &hangup)?;
+    crate::webrtc::teardown_peer(state.remote_user_id);
     persist_active_call_state(None)
+}
+
+#[frb]
+pub fn set_media_device_preferences(
+    microphone: Option<String>,
+    camera: Option<String>,
+) -> Result<(), String> {
+    crate::webrtc::set_media_devices(microphone, camera);
+    Ok(())
+}
+
+#[frb]
+pub fn get_media_device_preferences() -> Result<(Option<String>, Option<String>), String> {
+    Ok(crate::webrtc::current_media_devices())
+}
+
+#[frb]
+pub fn update_call_media_tracks(
+    user_id: i64,
+    remote_user_id: i64,
+    audio_enabled: bool,
+    video_enabled: bool,
+    audio_muted: bool,
+    video_muted: bool,
+) -> Result<(), String> {
+    let profile = CallMediaProfile {
+        audio_enabled,
+        video_enabled,
+        audio_muted: Some(audio_muted),
+        video_muted: Some(video_muted),
+    };
+    crate::webrtc::apply_call_media_profile(user_id, remote_user_id, &profile)
+}
+
+#[frb]
+pub fn set_call_mute_state(
+    user_id: i64,
+    remote_user_id: i64,
+    audio_muted: bool,
+    video_muted: bool,
+) -> Result<(), String> {
+    crate::webrtc::update_mute_state(user_id, remote_user_id, Some(audio_muted), Some(video_muted))
 }
 
 fn build_root_store_from_pem(pem: &str) -> Result<RootCertStore, String> {
