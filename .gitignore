@@ -10,3 +10,7 @@ certs
 data
 test1
 test2
+
+crates/client/flutter_app/target
+pc
+tel

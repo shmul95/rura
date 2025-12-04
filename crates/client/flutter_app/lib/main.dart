@@ -1,11 +1,15 @@
 import 'dart:async';
-import 'dart:io';
 import 'dart:convert';
-import 'package:flutter/material.dart';
-import 'package:video_player/video_player.dart';
+import 'dart:io';
 import 'dart:typed_data';
-import 'frb/api.dart';
+
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
+import 'package:path_provider/path_provider.dart';
+import 'package:video_player/video_player.dart';
+
+import 'frb/api.dart';
 import 'frb/frb_generated.dart';
 
 // App color palette
@@ -19,9 +23,17 @@ const kDark = Color(0xFF313638); // 313638
 const bool kRequireE2EE =
     bool.fromEnvironment('REQUIRE_E2EE', defaultValue: true);
 
+// App data directory (used on mobile to locate encrypted DB/media).
+String? _appDataDir;
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await RustLib.init();
+  if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
+    final dir = await getApplicationSupportDirectory();
+    _appDataDir = dir.path;
+    await setDataDir(path: _appDataDir!);
+  }
   runApp(const MyApp());
 }
 
@@ -205,8 +217,13 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _detectLocal() async {
     try {
-      // Prefer env override if present, else default to ../data (same as Rust side)
-      final envDir = Platform.environment['RURA_CLIENT_DATA_DIR'];
+      // Prefer mobile app data dir when available; otherwise env override, else ../data.
+      final String? envDir;
+      if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
+        envDir = _appDataDir;
+      } else {
+        envDir = Platform.environment['RURA_CLIENT_DATA_DIR'];
+      }
       final dir = envDir != null && envDir.trim().isNotEmpty
           ? Directory(envDir)
           : Directory('../data');
@@ -345,6 +362,45 @@ class _HomePageState extends State<HomePage> {
       ),
     );
   }
+
+  Future<void> _updateNumericNickname(int peerNumeric, String newName) async {
+    try {
+      final baseDir = (_appDataDir != null && _appDataDir!.trim().isNotEmpty)
+          ? Directory(_appDataDir!)
+          : (() {
+              final envDir = Platform.environment['RURA_CLIENT_DATA_DIR'];
+              return envDir != null && envDir.trim().isNotEmpty
+                  ? Directory(envDir)
+                  : Directory('../data');
+            })();
+      if (!baseDir.existsSync()) {
+        await baseDir.create(recursive: true);
+      }
+      final f = File('${baseDir.path}/nicknames.json');
+      Map<String, dynamic> data = {
+        'nicknames': <String, String>{},
+        'identities': <String, String>{}
+      };
+      if (await f.exists()) {
+        try {
+          final raw = await f.readAsString();
+          final parsed = jsonDecode(raw);
+          if (parsed is Map) {
+            data = parsed.map((k, v) => MapEntry(k.toString(), v));
+          }
+        } catch (_) {}
+      }
+      final nicks = (data['nicknames'] as Map?)
+              ?.map((k, v) => MapEntry(k.toString(), v.toString())) ??
+          <String, String>{};
+      // identities map is preserved as-is for identity chats.
+      nicks[peerNumeric.toString()] = newName;
+      data['nicknames'] = nicks;
+      await f.writeAsString(jsonEncode(data));
+    } catch (_) {
+      // best effort; ignore failures
+    }
+  }
 }
 
 extension on Stream<String> {
@@ -370,6 +426,45 @@ int idToNumeric(String id) {
     }
   } catch (_) {}
   return id.hashCode;
+}
+
+Future<void> _saveNumericNicknameForChat(
+    int peerNumeric, String newName) async {
+  try {
+    final baseDir = (_appDataDir != null && _appDataDir!.trim().isNotEmpty)
+        ? Directory(_appDataDir!)
+        : (() {
+            final envDir = Platform.environment['RURA_CLIENT_DATA_DIR'];
+            return envDir != null && envDir.trim().isNotEmpty
+                ? Directory(envDir)
+                : Directory('../data');
+          })();
+    if (!baseDir.existsSync()) {
+      await baseDir.create(recursive: true);
+    }
+    final f = File('${baseDir.path}/nicknames.json');
+    Map<String, dynamic> data = {
+      'nicknames': <String, String>{},
+      'identities': <String, String>{}
+    };
+    if (await f.exists()) {
+      try {
+        final raw = await f.readAsString();
+        final parsed = jsonDecode(raw);
+        if (parsed is Map) {
+          data = parsed.map((k, v) => MapEntry(k.toString(), v));
+        }
+      } catch (_) {}
+    }
+    final nicks = (data['nicknames'] as Map?)
+            ?.map((k, v) => MapEntry(k.toString(), v.toString())) ??
+        <String, String>{};
+    nicks[peerNumeric.toString()] = newName;
+    data['nicknames'] = nicks;
+    await f.writeAsString(jsonEncode(data));
+  } catch (_) {
+    // best effort; ignore failures
+  }
 }
 
 class ChatListPage extends StatelessWidget {
@@ -705,6 +800,11 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
   // ----- Nicknames persistence (simple local JSON next to encrypted DB) -----
   File _nicknamesFile() {
     try {
+      // Prefer app data dir when available so nicknames persist across restarts
+      // on both mobile and desktop. Fallback to env/../data when not set.
+      if (_appDataDir != null && _appDataDir!.trim().isNotEmpty) {
+        return File('$_appDataDir/nicknames.json');
+      }
       final envDir = Platform.environment['RURA_CLIENT_DATA_DIR'];
       final dir = envDir != null && envDir.trim().isNotEmpty
           ? Directory(envDir)
@@ -1749,10 +1849,14 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
   Future<void> _updateNicknameFile(int peerNumeric, String newName) async {
     try {
       // Mirror ChatListPage local JSON structure
-      final envDir = Platform.environment['RURA_CLIENT_DATA_DIR'];
-      final baseDir = envDir != null && envDir.trim().isNotEmpty
-          ? Directory(envDir)
-          : Directory('../data');
+      final baseDir = (_appDataDir != null && _appDataDir!.trim().isNotEmpty)
+          ? Directory(_appDataDir!)
+          : (() {
+              final envDir = Platform.environment['RURA_CLIENT_DATA_DIR'];
+              return envDir != null && envDir.trim().isNotEmpty
+                  ? Directory(envDir)
+                  : Directory('../data');
+            })();
       if (!baseDir.existsSync()) {
         await baseDir.create(recursive: true);
       }
@@ -1811,6 +1915,7 @@ class _ChatPageState extends State<ChatPage> {
   final _scroll = ScrollController();
   bool _sending = false;
   late List<HistoryMessage> _messages;
+  String? _displayName;
   StreamSubscription<HistoryMessage>? _inSub;
   CallState? _callState;
   bool _callBusy = false;
@@ -1819,6 +1924,7 @@ class _ChatPageState extends State<ChatPage> {
   void initState() {
     super.initState();
     _messages = List.of(widget.initial);
+     _displayName = widget.peerName;
     // Replace with full history for this peer from local DB
     _loadFromLocal();
     _loadCallState();
@@ -2006,10 +2112,56 @@ class _ChatPageState extends State<ChatPage> {
         .toList();
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.peerName?.isNotEmpty == true
-            ? widget.peerName!
-            : 'User ${widget.peerUserId}'),
+        title: Text(_displayName?.isNotEmpty == true
+            ? _displayName!
+            : (widget.peerName?.isNotEmpty == true
+                ? widget.peerName!
+                : 'User ${widget.peerUserId}')),
         actions: [
+          IconButton(
+            tooltip: 'Add nickname',
+            onPressed: () async {
+              final ctrl =
+                  TextEditingController(text: _displayName ?? widget.peerName);
+              final newName = await showDialog<String?>(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  title: const Text('Set nickname'),
+                  content: TextField(
+                    controller: ctrl,
+                    decoration:
+                        const InputDecoration(hintText: 'Enter a nickname'),
+                  ),
+                  actions: [
+                    TextButton(
+                        onPressed: () => Navigator.of(ctx).pop(null),
+                        child: const Text('Cancel')),
+                    ElevatedButton(
+                        onPressed: () =>
+                            Navigator.of(ctx).pop(ctrl.text.trim()),
+                        child: const Text('Save')),
+                  ],
+                ),
+              );
+              if (newName == null) return;
+              try {
+                await _saveNumericNicknameForChat(
+                    widget.peerUserId, newName);
+                if (!mounted) return;
+                setState(() => _displayName =
+                    newName.isEmpty ? null : newName);
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                    content: Text('Nickname saved locally for this chat')));
+              } catch (e) {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Failed to save nickname: $e')),
+                  );
+                }
+              }
+            },
+            icon: const Icon(Icons.person_add_alt_1),
+          ),
           if (_callState == null) ...[
             IconButton(
               tooltip: 'Audio call',

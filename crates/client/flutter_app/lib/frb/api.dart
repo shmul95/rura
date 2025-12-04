@@ -23,6 +23,13 @@ Future<void> appendLocalMessage(
 Future<List<HistoryMessage>> loadLocalHistory({BigInt? limit}) =>
     RustLib.instance.api.crateApiLoadLocalHistory(limit: limit);
 
+/// Configure the client data directory at runtime (e.g., from Flutter on Android).
+///
+/// This sets the `RURA_CLIENT_DATA_DIR` environment variable, which is respected by
+/// both `security` and `local_storage` modules when resolving paths.
+Future<void> setDataDir({required String path}) =>
+    RustLib.instance.api.crateApiSetDataDir(path: path);
+
 /// Get the account's 256-bit random user_id (returns base64 string).
 Future<String> getAccountId() => RustLib.instance.api.crateApiGetAccountId();
 

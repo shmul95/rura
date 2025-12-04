@@ -1,5 +1,6 @@
 #![allow(unexpected_cfgs)]
 pub mod api;
+pub mod audio;
 pub mod local_storage;
 pub mod security;
 pub mod webrtc;

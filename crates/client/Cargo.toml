@@ -23,6 +23,7 @@ chacha20poly1305 = { version = "0.10", features = ["std"] }
 base64 = "0.21"
 ring = "0.17"
 webrtc = "0.14.0"
+cpal = "0.15"
 tokio = { version = "1.47", features = ["rt-multi-thread", "time"] }
 hkdf = "0.12"
 sha2 = "0.10"

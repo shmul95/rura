@@ -261,6 +261,7 @@ fn record_call_answer(user_id: i64, answer: &CallAnswer) -> Result<(), String> {
             state.audio_enabled = media.audio_enabled;
             state.video_enabled = media.video_enabled;
         }
+        let _ = crate::audio::start_call_audio(state.remote_user_id);
     })
 }
 
@@ -273,6 +274,7 @@ fn record_call_ringing(call_id: &str) -> Result<(), String> {
 fn record_call_end(call_id: &str) -> Result<(), String> {
     if let Some(state) = load_active_call_state()? {
         if state.call_id == call_id {
+            crate::audio::stop_call_audio(state.remote_user_id);
             crate::webrtc::teardown_peer(state.remote_user_id);
         }
     }
@@ -357,6 +359,20 @@ pub fn append_local_message(
 pub fn load_local_history(limit: Option<usize>) -> Result<Vec<HistoryMessage>, String> {
     crate::local_storage::init_storage()?;
     crate::local_storage::load_history(limit)
+}
+
+/// Configure the client data directory at runtime (e.g., from Flutter on Android).
+///
+/// This sets the `RURA_CLIENT_DATA_DIR` environment variable, which is respected by
+/// both `security` and `local_storage` modules when resolving paths.
+#[frb]
+pub fn set_data_dir(path: String) -> Result<(), String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("data dir path must not be empty".to_string());
+    }
+    std::env::set_var("RURA_CLIENT_DATA_DIR", trimmed);
+    Ok(())
 }
 
 /// Get the account's 256-bit random user_id (returns base64 string).
@@ -500,6 +516,7 @@ pub fn accept_call(user_id: i64, call_id: String, enable_video: bool) -> Result<
     state.status = CallStatus::Connected;
     state.video_enabled = enable_video;
     state.audio_enabled = true;
+    let _ = crate::audio::start_call_audio(state.remote_user_id);
     persist_active_call_state(Some(state.clone()))?;
     Ok(state)
 }

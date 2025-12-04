@@ -37,7 +37,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.11.1";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1341614572;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1714115791;
 
 // Section: executor
 
@@ -1177,6 +1177,39 @@ fn wire__crate__api__set_contact_nickname_impl(
         },
     )
 }
+fn wire__crate__api__set_data_dir_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "set_data_dir",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_path = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::set_data_dir(api_path)?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__set_media_device_preferences_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -1651,12 +1684,13 @@ fn pde_ffi_dispatcher_primary_impl(
         27 => wire__crate__api__send_media_to_identity_impl(port, ptr, rust_vec_len, data_len),
         28 => wire__crate__api__set_call_mute_state_impl(port, ptr, rust_vec_len, data_len),
         29 => wire__crate__api__set_contact_nickname_impl(port, ptr, rust_vec_len, data_len),
-        30 => {
+        30 => wire__crate__api__set_data_dir_impl(port, ptr, rust_vec_len, data_len),
+        31 => {
             wire__crate__api__set_media_device_preferences_impl(port, ptr, rust_vec_len, data_len)
         }
-        31 => wire__crate__api__set_pubkey_over_stream_impl(port, ptr, rust_vec_len, data_len),
-        32 => wire__crate__api__start_call_impl(port, ptr, rust_vec_len, data_len),
-        33 => wire__crate__api__update_call_media_tracks_impl(port, ptr, rust_vec_len, data_len),
+        32 => wire__crate__api__set_pubkey_over_stream_impl(port, ptr, rust_vec_len, data_len),
+        33 => wire__crate__api__start_call_impl(port, ptr, rust_vec_len, data_len),
+        34 => wire__crate__api__update_call_media_tracks_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
