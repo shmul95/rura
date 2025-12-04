@@ -6,7 +6,9 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
+import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import 'package:video_player/video_player.dart';
 
 import 'frb/api.dart';
@@ -880,6 +882,135 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
     super.dispose();
   }
 
+  Future<void> _showOwnQr(BuildContext context) async {
+    try {
+      final id = await getAccountId();
+      final pk = await getAccountPubkey();
+      final payload = jsonEncode({
+        'id': id,
+        'pk': pk,
+      });
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('My contact QR'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: 220,
+                height: 220,
+                child: QrImageView(
+                  data: payload,
+                  version: QrVersions.auto,
+                  size: 220,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Scan this to add me as a contact',
+                style: Theme.of(ctx).textTheme.bodySmall,
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('Close')),
+          ],
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to generate QR: $e')),
+      );
+    }
+  }
+
+  Future<void> _scanContactQr(BuildContext context) async {
+    final res = await showDialog<String?>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          title: const Text('Scan contact QR'),
+          content: SizedBox(
+            width: 260,
+            height: 260,
+            child: MobileScanner(
+              onDetect: (capture) {
+                final barcode = capture.barcodes.firstOrNull;
+                final raw = barcode?.rawValue;
+                if (raw != null && raw.isNotEmpty) {
+                  Navigator.of(ctx).pop(raw);
+                }
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.of(ctx).pop(null),
+                child: const Text('Cancel')),
+          ],
+        );
+      },
+    );
+    if (res == null || !mounted) return;
+    try {
+      final map = jsonDecode(res);
+      if (map is! Map) {
+        throw const FormatException('QR payload not a map');
+      }
+      final id = (map['id'] ?? '').toString().trim();
+      final pk = (map['pk'] ?? '').toString().trim();
+      if (id.isEmpty || pk.isEmpty) {
+        throw const FormatException('Missing id or pk');
+      }
+      final nickCtrl = TextEditingController();
+      final nk = await showDialog<String?>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Set nickname'),
+          content: TextField(
+            controller: nickCtrl,
+            decoration:
+                const InputDecoration(hintText: 'Who is this person?'),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.of(ctx).pop(null),
+                child: const Text('Skip')),
+            ElevatedButton(
+                onPressed: () => Navigator.of(ctx).pop(nickCtrl.text.trim()),
+                child: const Text('Save')),
+          ],
+        ),
+      );
+      try {
+        await addContact(userId: id, pubkey: pk);
+      } catch (_) {}
+      final peer = idToNumeric(id);
+      setState(() {
+        if (nk != null && nk.isNotEmpty) {
+          _nicknames[peer] = nk;
+        }
+        _identityByPeer[peer] = id;
+        _groups.putIfAbsent(peer, () => <HistoryMessage>[]);
+      });
+      unawaited(_saveNicknames());
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+            content: Text('Contact added: ' +
+                (_nicknames[peer] ?? id.substring(0, 10) + '…'))),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to scan contact: $e')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     // Merge conversations from messages with manually added contacts (no messages yet)
@@ -898,7 +1029,26 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
         return bt.compareTo(at);
       });
     return Scaffold(
-      appBar: AppBar(title: const Text('Chats')),
+      appBar: AppBar(
+        title: const Text('Chats'),
+        actions: [
+          IconButton(
+            tooltip: 'Show my QR',
+            onPressed: () async {
+              await _showOwnQr(context);
+            },
+            icon: const Icon(Icons.qr_code_2),
+          ),
+          if (!kIsWeb && (Platform.isAndroid || Platform.isIOS))
+            IconButton(
+              tooltip: 'Scan QR',
+              onPressed: () async {
+                await _scanContactQr(context);
+              },
+              icon: const Icon(Icons.qr_code_scanner),
+            ),
+        ],
+      ),
       body: ListView.separated(
         itemCount: items.length,
         separatorBuilder: (_, __) => const Divider(height: 1),
