@@ -206,7 +206,6 @@ class SessionConfig {
 
 class _HomePageState extends State<HomePage> {
   final _host = TextEditingController(text: '127.0.0.1');
-  final _port = TextEditingController(text: '8443');
   final _password = TextEditingController(text: 'secret');
   String _status = 'Ready';
   bool _hasLocal = false;
@@ -240,7 +239,7 @@ class _HomePageState extends State<HomePage> {
     setState(() => _status = register ? 'Registering...' : 'Logging in...');
     try {
       final host = _host.text.trim();
-      final port = int.tryParse(_port.text.trim()) ?? 8443;
+      const port = 8443;
       // Load CA from bundled assets
       final caPem = await rootBundle.loadString('assets/ca.crt');
       final pass = '';
@@ -301,7 +300,17 @@ class _HomePageState extends State<HomePage> {
       // Re-detect local storage for next time
       _detectLocal();
     } catch (e) {
-      setState(() => _status = '${register ? 'Register' : 'Login'} failed: $e');
+      setState(() =>
+          _status = '${register ? 'Register' : 'Login'} failed: $e');
+      // If the online path fails (e.g., server unreachable), fall back to
+      // offline local unlock/register so the user can still access contacts.
+      if (!register && _hasLocal) {
+        // ignore: discarded_futures
+        _unlockAndShowHistory();
+      } else if (register && !_hasLocal) {
+        // ignore: discarded_futures
+        _registerLocal();
+      }
     }
   }
 
@@ -327,13 +336,7 @@ class _HomePageState extends State<HomePage> {
                 controller: _host,
                 decoration: const InputDecoration(
                     labelText: 'Server host (e.g., 127.0.0.1)')),
-            const SizedBox(height: 8),
-            TextField(
-                controller: _port,
-                decoration: const InputDecoration(
-                    labelText: 'Server port (e.g., 8443)'),
-                keyboardType: TextInputType.number),
-            const SizedBox(height: 8),
+            const SizedBox(height: 12),
             const SizedBox(height: 12),
             // Password to unlock local encrypted DB (used in both login and register flows)
             TextField(
@@ -799,6 +802,103 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
     }, onError: (_) {});
   }
 
+  Future<void> _promptConnectServer() async {
+    final hostCtrl = TextEditingController(
+      text:
+          widget.session.host.isNotEmpty ? widget.session.host : '127.0.0.1',
+    );
+    final res = await showDialog<Map<String, String>?>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Connect to server'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: hostCtrl,
+              decoration: const InputDecoration(
+                  labelText: 'Server host (e.g., 127.0.0.1)'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () {
+              final h = hostCtrl.text.trim();
+              if (h.isEmpty) return;
+              Navigator.of(ctx).pop({'host': h});
+            },
+            child: const Text('Connect'),
+          ),
+        ],
+      ),
+    );
+    if (res == null || !mounted) return;
+    final host = res['host']?.trim() ?? '';
+    if (host.isEmpty) return;
+    // ignore: discarded_futures
+    _connectToServer(host: host);
+  }
+
+  Future<void> _connectToServer({required String host}) async {
+    const port = 8443;
+    try {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Connecting to server...')),
+      );
+      final caPem = await rootBundle.loadString('assets/ca.crt');
+      final passphrase = '';
+      final pwd = widget.session.password;
+      final rawStream = openMessageStreamTls(
+        host: host,
+        port: port,
+        caPem: caPem,
+        passphrase: passphrase,
+        password: pwd,
+      );
+      final stream = rawStream.asBroadcastStream();
+
+      final first = await stream.first.timeout(const Duration(seconds: 5));
+      final firstMap = jsonDecode(first) as Map;
+      if (firstMap['type'] != 'auth_ok') {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Unexpected response from server')),
+        );
+        return;
+      }
+      final userId = firstMap['user_id'] as int;
+      final history = await loadLocalHistory(limit: BigInt.from(500));
+      final bundle = HistoryBundle(
+        success: true,
+        message: 'OK',
+        userId: userId,
+        messages: history,
+      );
+      if (!mounted) return;
+      final session = SessionConfig(
+        host: host,
+        port: port,
+        caPem: caPem,
+        passphrase: passphrase,
+        password: pwd,
+      );
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (_) =>
+              ChatListPage(bundle: bundle, session: session, incoming: stream),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Connect failed: $e')),
+      );
+    }
+  }
+
   // ----- Nicknames persistence (simple local JSON next to encrypted DB) -----
   File _nicknamesFile() {
     try {
@@ -1028,6 +1128,7 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
             : DateTime(0);
         return bt.compareTo(at);
       });
+    final isOnline = widget.session.host.isNotEmpty;
     return Scaffold(
       appBar: AppBar(
         title: const Text('Chats'),
@@ -1049,70 +1150,98 @@ class _ChatListScaffoldState extends State<_ChatListScaffold> {
             ),
         ],
       ),
-      body: ListView.separated(
-        itemCount: items.length,
-        separatorBuilder: (_, __) => const Divider(height: 1),
-        itemBuilder: (context, index) {
-          final peerId = items[index].key;
-          final msgs = items[index].value;
-          final last = msgs.isNotEmpty ? msgs.last : null;
-          return ListTile(
-            leading: const CircleAvatar(
-              backgroundColor: kSecondary,
-              foregroundColor: Colors.black,
-              child: Icon(Icons.person),
+      body: Column(
+        children: [
+          if (!isOnline)
+            Container(
+              width: double.infinity,
+              color: Colors.orange.withOpacity(0.15),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: Row(
+                children: [
+                  const Icon(Icons.wifi_off, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Offline mode: you can manage contacts, but messaging and calls are disabled.',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: _promptConnectServer,
+                    child: const Text('Connect to server'),
+                  ),
+                ],
+              ),
             ),
-            title: Text(_nicknames[peerId] ??
-                _identityByPeer[peerId] ??
-                peerId.toString()),
-            subtitle: Text(_previewText(last?.body ?? '')),
-            trailing: Text(
-              last != null ? _formatTime(last.timestamp) : '',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-            onTap: () async {
-              // If we have an identity for this peer (because we added the contact), open identity chat.
-              final rid = _reverseIdentityFor(peerId);
-              if (rid != null) {
-                await Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => ChatIdentityPage(
-                      session: widget.session,
-                      selfUserId: _selfId,
-                      recipientId: rid,
-                      recipientPubKey: '',
-                      recipientName: _nicknames[peerId],
-                      inbound: _incoming.stream,
-                      incomingRaw: widget.incoming ??
-                          openMessageStreamTls(
-                            host: widget.session.host,
-                            port: widget.session.port,
-                            caPem: widget.session.caPem,
-                            passphrase: widget.session.passphrase,
-                            password: widget.session.password,
+          Expanded(
+            child: ListView.separated(
+              itemCount: items.length,
+              separatorBuilder: (_, __) => const Divider(height: 1),
+              itemBuilder: (context, index) {
+                final peerId = items[index].key;
+                final msgs = items[index].value;
+                final last = msgs.isNotEmpty ? msgs.last : null;
+                return ListTile(
+                  leading: const CircleAvatar(
+                    backgroundColor: kSecondary,
+                    foregroundColor: Colors.black,
+                    child: Icon(Icons.person),
+                  ),
+                  title: Text(_nicknames[peerId] ??
+                      _identityByPeer[peerId] ??
+                      peerId.toString()),
+                  subtitle: Text(_previewText(last?.body ?? '')),
+                  trailing: Text(
+                    last != null ? _formatTime(last.timestamp) : '',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  onTap: () async {
+                    // If we have an identity for this peer (because we added the contact), open identity chat.
+                    final rid = _reverseIdentityFor(peerId);
+                    if (rid != null) {
+                      await Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => ChatIdentityPage(
+                            session: widget.session,
+                            selfUserId: _selfId,
+                            recipientId: rid,
+                            recipientPubKey: '',
+                            recipientName: _nicknames[peerId],
+                            inbound: _incoming.stream,
+                            incomingRaw: widget.incoming ??
+                                openMessageStreamTls(
+                                  host: widget.session.host,
+                                  port: widget.session.port,
+                                  caPem: widget.session.caPem,
+                                  passphrase: widget.session.passphrase,
+                                  password: widget.session.password,
+                                ),
                           ),
-                    ),
-                  ),
+                        ),
+                      );
+                      await _reloadFromLocal();
+                    } else {
+                      await Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => ChatPage(
+                            session: widget.session,
+                            selfUserId: _selfId,
+                            peerUserId: peerId,
+                            initial: msgs,
+                            peerName: _nicknames[peerId],
+                            inbound: _incoming.stream,
+                          ),
+                        ),
+                      );
+                      await _reloadFromLocal();
+                    }
+                  },
                 );
-                await _reloadFromLocal();
-              } else {
-                await Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => ChatPage(
-                      session: widget.session,
-                      selfUserId: _selfId,
-                      peerUserId: peerId,
-                      initial: msgs,
-                      peerName: _nicknames[peerId],
-                      inbound: _incoming.stream,
-                    ),
-                  ),
-                );
-                await _reloadFromLocal();
-              }
-            },
-          );
-        },
+              },
+            ),
+          ),
+        ],
       ),
       floatingActionButton: FloatingActionButton(
         onPressed: () async {
@@ -1353,6 +1482,26 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
   Future<void> _send() async {
     final text = _input.text.trim();
     if (text.isEmpty) return;
+    if (widget.session.host.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content:
+                  Text('Offline mode: messages can only be sent when connected.')),
+        );
+      }
+      return;
+    }
+    if (widget.session.host.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text(
+                  'Offline mode: you can only send identity messages when connected.')),
+        );
+      }
+      return;
+    }
     setState(() => _sending = true);
     try {
       // If the user typed plaintext, wrap into a v1 envelope (dev-only transport wrapper)
@@ -1479,6 +1628,16 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
   Future<void> _pickAndSendFile() async {
     // In-app fallback file chooser (no external plugin). Starts at user's home.
     if (_sending) return;
+    if (widget.session.host.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text(
+                  'Offline mode: file sharing is only available when connected.')),
+        );
+      }
+      return;
+    }
     setState(() => _sending = true);
     try {
       final picked = await _browseForFile(context);
@@ -1617,6 +1776,26 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
 
   Future<void> _startCall({required bool enableVideo}) async {
     if (_callBusy) return;
+    if (widget.session.host.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content:
+                  Text('Offline mode: calls are only available when connected.')),
+        );
+      }
+      return;
+    }
+    if (widget.session.host.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content:
+                  Text('Offline mode: calls are only available when connected.')),
+        );
+      }
+      return;
+    }
     setState(() => _callBusy = true);
     try {
       final remoteNumeric = idToNumeric(widget.recipientId);
@@ -1661,6 +1840,26 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
   Future<void> _endCurrentCall() async {
     final current = _callState;
     if (current == null || _callBusy) return;
+    if (widget.session.host.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content:
+                  Text('Offline mode: calls are only available when connected.')),
+        );
+      }
+      return;
+    }
+    if (widget.session.host.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content:
+                  Text('Offline mode: calls are only available when connected.')),
+        );
+      }
+      return;
+    }
     setState(() => _callBusy = true);
     try {
       final wasRinging = current.status == CallStatus.ringing;
@@ -1730,6 +1929,7 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
 
   @override
   Widget build(BuildContext context) {
+    final isOnline = widget.session.host.isNotEmpty;
     final title = _displayName ?? widget.recipientId;
     final remoteNumeric = idToNumeric(widget.recipientId);
     return Scaffold(
@@ -1742,13 +1942,16 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
           if (_callState == null) ...[
             IconButton(
               tooltip: 'Audio call',
-              onPressed:
-                  _callBusy ? null : () => _startCall(enableVideo: false),
+              onPressed: _callBusy || !isOnline
+                  ? null
+                  : () => _startCall(enableVideo: false),
               icon: const Icon(Icons.call),
             ),
             IconButton(
               tooltip: 'Video call',
-              onPressed: _callBusy ? null : () => _startCall(enableVideo: true),
+              onPressed: _callBusy || !isOnline
+                  ? null
+                  : () => _startCall(enableVideo: true),
               icon: const Icon(Icons.videocam),
             ),
           ] else
@@ -1761,6 +1964,24 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
       ),
       body: Column(
         children: [
+          if (!isOnline)
+            Container(
+              width: double.infinity,
+              color: Colors.orange.withOpacity(0.15),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: Row(
+                children: [
+                  const Icon(Icons.wifi_off, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Offline mode: you can view history and contacts, but messaging and calls are disabled.',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ),
+                ],
+              ),
+            ),
           if (_callState != null)
             Container(
               width: double.infinity,
@@ -1937,7 +2158,12 @@ class _ChatIdentityPageState extends State<ChatIdentityPage> {
                   ),
                   const SizedBox(width: 8),
                   IconButton(
-                    onPressed: _sending ? null : _send,
+                    onPressed: _sending
+                        ? null
+                        : () {
+                            // ignore: discarded_futures
+                            _send();
+                          },
                     icon: _sending
                         ? const SizedBox(
                             width: 18,
@@ -2254,6 +2480,7 @@ class _ChatPageState extends State<ChatPage> {
 
   @override
   Widget build(BuildContext context) {
+    final isOnline = widget.session.host.isNotEmpty;
     final self = widget.selfUserId;
     final msgs = _messages
         .where((m) =>
@@ -2315,13 +2542,16 @@ class _ChatPageState extends State<ChatPage> {
           if (_callState == null) ...[
             IconButton(
               tooltip: 'Audio call',
-              onPressed:
-                  _callBusy ? null : () => _startCall(enableVideo: false),
+              onPressed: _callBusy || !isOnline
+                  ? null
+                  : () => _startCall(enableVideo: false),
               icon: const Icon(Icons.call),
             ),
             IconButton(
               tooltip: 'Video call',
-              onPressed: _callBusy ? null : () => _startCall(enableVideo: true),
+              onPressed: _callBusy || !isOnline
+                  ? null
+                  : () => _startCall(enableVideo: true),
               icon: const Icon(Icons.videocam),
             ),
           ] else
@@ -2334,6 +2564,24 @@ class _ChatPageState extends State<ChatPage> {
       ),
       body: Column(
         children: [
+          if (!isOnline)
+            Container(
+              width: double.infinity,
+              color: Colors.orange.withOpacity(0.15),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: Row(
+                children: [
+                  const Icon(Icons.wifi_off, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Offline mode: you can view history and contacts, but messaging and calls are disabled.',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ),
+                ],
+              ),
+            ),
           if (_callState != null)
             Container(
               width: double.infinity,
