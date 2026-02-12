@@ -177,8 +177,8 @@
           export PATH="${pkgs.lib.makeBinPath rustDeps}:$PATH"
           export PKG_CONFIG_PATH="${commonEnv.PKG_CONFIG_PATH}"
           
-          cargo build --release --lib -p client --crate-type cdylib
-          echo "Client library built: $REPO_ROOT/target/release/libclient.so"
+          cargo build --release --lib -p rura_client
+          echo "Client library built: $REPO_ROOT/target/release/librura_client.so"
         '';
 
         # Desktop Flutter app script
@@ -200,10 +200,10 @@
           
           # Build Rust client library first
           echo "Building Rust client library..."
-          cargo build --release --lib -p client --crate-type cdylib
+          cargo build --release --lib -p rura_client
           
           # Build and run Flutter desktop app
-          cd pc
+          cd pc/flutter_app
           echo "Building Flutter desktop app..."
           flutter pub get
           flutter build linux --release
